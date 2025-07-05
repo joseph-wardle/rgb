@@ -1,3 +1,4 @@
+#[allow(non_camel_case_types)]
 pub enum Flag {
     ZERO = 0b1000_0000,       // Often named just Z
     SUBTRACT = 0b0100_0000,   // Often named just N
