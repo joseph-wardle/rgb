@@ -1,0 +1,8 @@
+[package]
+name                 = "rgb_core"
+edition.workspace    = true
+version.workspace    = true
+repository.workspace = true
+readme.workspace     = true
+
+[dependencies]

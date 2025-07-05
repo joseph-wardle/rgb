@@ -1,0 +1,7 @@
+[package]
+name = "rgb_cli"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+rgb_core = { path = "../rgb_core" }
