@@ -803,6 +803,15 @@ impl CPU {
             0x75 => mmu.write_byte(self.reg.get_hl(), self.reg.l), // LD (HL),L
             0x77 => mmu.write_byte(self.reg.get_hl(), self.reg.a), // LD (HL),A
 
+            0x78 => self.reg.a = self.reg.b, // LD A,B
+            0x79 => self.reg.a = self.reg.c, // LD A,C
+            0x7A => self.reg.a = self.reg.d, // LD A,D
+            0x7B => self.reg.a = self.reg.e, // LD A,E
+            0x7C => self.reg.a = self.reg.h, // LD A,H
+            0x7D => self.reg.a = self.reg.l, // LD A,L
+            0x7E => self.reg.a = mmu.read_byte(self.reg.get_hl()), // LD A,(HL)
+            0x7F => {/* LD A,A – no effect */}, // LD A,A
+
             // HALT
             0x76 => self.halted = true, // HALT
 
