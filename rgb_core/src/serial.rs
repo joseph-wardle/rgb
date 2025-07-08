@@ -28,17 +28,26 @@
 pub struct Serial {
     pub sb: u8, // Serial transfer data
     pub sc: u8, // Serial transfer control
+    buffer: Vec<u8>,
 }
 
 impl Serial {
     pub fn output_string(&self) -> String {
-        "".to_string() //TODO: Implement output string for Serial
+        String::from_utf8_lossy(&self.buffer).to_string()
     }
 }
 
 impl Serial {
     pub fn new() -> Self {
-        Serial { sb: 0, sc: 0 }
+        Serial { sb: 0, sc: 0, buffer: Vec::new() }
+    }
+
+    pub fn write_control(&mut self, value: u8) {
+        self.sc = value;
+        if self.sc & 0x80 != 0 {
+            self.buffer.push(self.sb);
+            self.sc &= 0x7F; // transfer complete
+        }
     }
     
     

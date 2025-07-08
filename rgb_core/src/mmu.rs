@@ -105,7 +105,7 @@ impl MMU {
             0xFF07 => self.timer.tac,
             0xFF0F => self.interrupt_flag,
             0xFF10..=0xFF3F => self.apu.read_byte(address),
-            _ => unreachable!("Invalid I/O address: 0x{:4X}", address),
+            _ => 0,
         }
     }
 
@@ -113,14 +113,14 @@ impl MMU {
         match address {
             0xFF00 => self.joypad.state = (self.joypad.state & 0x0F) | (value & 0xF0),
             0xFF01 => self.serial.sb = value,
-            0xFF02 => self.serial.sc = value,
+            0xFF02 => self.serial.write_control(value),
             0xFF04 => self.timer.div = 0,
             0xFF05 => self.timer.tima = value,
             0xFF06 => self.timer.tma = value,
             0xFF07 => self.timer.tac = value,
             0xFF0F => self.interrupt_flag = value,
             0xFF10..=0xFF3F => self.apu.write_byte(address, value),
-            _ => unreachable!("Invalid I/O address: 0x{:04X}", address),
+            _ => (),
         }
     }
 }

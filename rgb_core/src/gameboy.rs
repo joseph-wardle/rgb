@@ -32,14 +32,12 @@ impl DMG {
     }
     
     pub fn step_frame(&mut self) {
-        loop {
-            self.cpu.step(&mut self.bus);
-            // self.ppu.step(c, &mut self.bus);
-            // self.timer.step(c, &mut self.bus);
-            // self.apu.step(c);
-            // self.cpu.service_interrupts(&mut self.bus);
-            // cycles_this_frame += c;
-        }
+        self.cpu.step(&mut self.bus);
+        // self.ppu.step(c, &mut self.bus);
+        // self.timer.step(c, &mut self.bus);
+        // self.apu.step(c);
+        // self.cpu.service_interrupts(&mut self.bus);
+        // cycles_this_frame += c;
     }
 
     pub fn run_until<F>(&mut self, mut condition: F, max_steps: usize)
@@ -52,5 +50,13 @@ impl DMG {
                 break;
             }
         }
+    }
+
+    pub fn cpu(&self) -> &CPU {
+        &self.cpu
+    }
+
+    pub fn cpu_mut(&mut self) -> &mut CPU {
+        &mut self.cpu
     }
 }
