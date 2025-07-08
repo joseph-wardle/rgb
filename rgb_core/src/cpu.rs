@@ -12,7 +12,7 @@ pub struct CPU {
 }
 
 impl CPU {
-    fn log_state(&self, mmu: &impl MemoryBus, pc_snapshot: u16) {
+    fn _log_state(&self, mmu: &impl MemoryBus, pc_snapshot: u16) {
         // Grab the four bytes starting at the **pre-execute** PC
         let pc_bytes = [
             mmu.read_byte(pc_snapshot),
@@ -309,31 +309,15 @@ impl CPU {
     // CARRY      - Set if carry from bit 15
     fn add_sp(&mut self, n: u8) {
         let sp = self.reg.sp;
-        let n = n as i8;
+        let n = n as i8 as i16 as u16;
 
-        let result = if n >= 0 {
-            sp.wrapping_add(n as u16)
-        } else {
-            sp.wrapping_sub((-n) as u16)
-        };
+        let result = sp.wrapping_add(n);
 
         self.reg.set_flag(ZERO, false);
         self.reg.set_flag(SUBTRACT, false);
 
-        let half_carry_check = if n >= 0 {
-            (sp & 0x0F) + ((n as u16) & 0x0F) > 0x0F
-        } else {
-            (sp & 0x0F) < ((-n as u16) & 0x0F)
-        };
-
-        let carry_check = if n >= 0 {
-            (sp & 0xFF) + ((n as u16) & 0xFF) > 0xFF
-        } else {
-            (sp & 0xFF) < ((-n as u16) & 0xFF)
-        };
-
-        self.reg.set_flag(HALF_CARRY, half_carry_check);
-        self.reg.set_flag(CARRY, carry_check);
+        self.reg.set_flag(HALF_CARRY, (sp & 0x000F) + (n & 0x000F) > 0x000F);
+        self.reg.set_flag(CARRY, (sp & 0x00FF) + (n & 0x00FF) > 0x00FF);
 
         self.reg.sp = result;
     }
@@ -1175,32 +1159,17 @@ impl CPU {
 
             // LD HL, SP + imm8
             0xF8 => {
-                let n = self.fetch_byte(mmu) as i8;
+                let n = self.fetch_byte(mmu);
                 let sp = self.reg.sp;
+                let n = n as i8 as i16 as u16;
 
-                let result = if n >= 0 {
-                    sp.wrapping_add(n as u16)
-                } else {
-                    sp.wrapping_sub((-n) as u16)
-                };
+                let result = sp.wrapping_add(n);
 
                 self.reg.set_flag(ZERO, false);
                 self.reg.set_flag(SUBTRACT, false);
 
-                let half_carry_check = if n >= 0 {
-                    (sp & 0x0F) + ((n as u16) & 0x0F) > 0x0F
-                } else {
-                    (sp & 0x0F) < ((-n as u16) & 0x0F)
-                };
-
-                let carry_check = if n >= 0 {
-                    (sp & 0xFF) + ((n as u16) & 0xFF) > 0xFF
-                } else {
-                    (sp & 0xFF) < ((-n as u16) & 0xFF)
-                };
-
-                self.reg.set_flag(HALF_CARRY, half_carry_check);
-                self.reg.set_flag(CARRY, carry_check);
+                self.reg.set_flag(HALF_CARRY, (sp & 0x000F) + (n & 0x000F) > 0x000F);
+                self.reg.set_flag(CARRY, (sp & 0x00FF) + (n & 0x00FF) > 0x00FF);
 
                 self.reg.set_hl(result);
             } // LD HL,SP+imm8
@@ -1612,7 +1581,6 @@ impl CPU {
                         mmu.write_byte(hl, value);
                     } // SET 7,(HL)
                     0xFF => self.reg.a = self.set(7, self.reg.a), // SET 7,A
-                    _ => panic!("Unknown CB opcode: 0xCB{:02X}", opcode),
                 }
             }
 
