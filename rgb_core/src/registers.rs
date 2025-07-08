@@ -1,15 +1,15 @@
 #[allow(non_camel_case_types)]
 pub enum Flag {
-    ZERO = 0b1000_0000,       // Often named just Z
-    SUBTRACT = 0b0100_0000,   // Often named just N
+    ZERO       = 0b1000_0000, // Often named just Z
+    SUBTRACT   = 0b0100_0000, // Often named just N
     HALF_CARRY = 0b0010_0000, // Often named just H
-    CARRY = 0b0001_0000,      // Often named just C
+    CARRY      = 0b0001_0000, // Often named just C
 }
 
 #[derive(Debug, Default, Clone, Copy, Eq, PartialEq)]
 pub struct Registers {
     pub a: u8, // Accumulator
-    f: u8,     // Flags
+    pub f: u8, // Flags
     pub b: u8,
     pub c: u8,
     pub d: u8,
@@ -33,6 +33,21 @@ impl Registers {
             f: 0xB0,
             pc: 0x0100,
             sp: 0xFFFE,
+        }
+    }
+
+    pub fn new_post_bios() -> Self {
+        Self {
+            a: 0x01,
+            f: 0xB0, // ZNHC flags = 0b1100
+            b: 0x00,
+            c: 0x13,
+            d: 0x00,
+            e: 0xD8,
+            h: 0x01,
+            l: 0x4D,
+            sp: 0xFFFE,
+            pc: 0x0100,
         }
     }
 
