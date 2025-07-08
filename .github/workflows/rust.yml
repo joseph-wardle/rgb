@@ -11,12 +11,15 @@ env:
 
 jobs:
   build:
-
     runs-on: ubuntu-latest
 
     steps:
     - uses: actions/checkout@v4
-    - name: Build
-      run: cargo build --verbose
+
+    #— Build every target (lib, bin, examples, tests, benches) in every crate
+    - name: Build workspace
+      run: cargo build --workspace --all-targets --verbose
+
+    #— Run the unit & doc tests for every crate (incl. optional features if you want)
     - name: Run tests
-      run: cargo test --verbose
+      run: cargo test  --workspace --all-features --verbose
