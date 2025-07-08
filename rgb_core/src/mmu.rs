@@ -11,7 +11,7 @@ pub struct MMU {
     apu: APU,                      // Audio Processing Unit
     ppu: PPU,                      // Graphics Processing Unit
     joypad: Joypad,                // Joypad input
-    serial: Serial,                // Serial communication
+    pub serial: Serial,                // Serial communication
     timer: Timer,                  // Timer
 
     // | 7  6  5 |   4    |   3    |   2   |  1  |   0    |

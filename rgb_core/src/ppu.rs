@@ -26,7 +26,7 @@ impl PPU {
             lcd_status: 0,
             scroll_y: 0,
             scroll_x: 0,
-            ly: 0,
+            ly: 0x90, //0,
             lyc: 0,
             dma: 0,
             bg_palette: 0,

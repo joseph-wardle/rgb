@@ -31,7 +31,15 @@ pub struct Serial {
 }
 
 impl Serial {
+    pub fn output_string(&self) -> String {
+        "".to_string() //TODO: Implement output string for Serial
+    }
+}
+
+impl Serial {
     pub fn new() -> Self {
         Serial { sb: 0, sc: 0 }
     }
+    
+    
 }
