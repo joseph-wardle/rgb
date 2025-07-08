@@ -625,8 +625,8 @@ impl CPU {
     }
 
     pub fn step(&mut self, mmu: &mut impl MemoryBus) {
-        let pc_before = self.reg.pc;
-        self.log_state(mmu, pc_before);
+        // let pc_before = self.reg.pc;
+        // self.log_state(mmu, pc_before);
         
         let opcode = self.fetch_byte(mmu);
         match opcode {
