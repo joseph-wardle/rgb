@@ -769,26 +769,26 @@ impl CPU {
                 self.jr(imm8)
             } // JR imm8
             0x20 => {
+                let imm8 = self.fetch_byte(mmu);
                 if !self.reg.get_flag(ZERO) {
-                    let imm8 = self.fetch_byte(mmu);
                     self.jr(imm8)
                 }
             } // JR NZ,imm8
             0x28 => {
+                let imm8 = self.fetch_byte(mmu);
                 if self.reg.get_flag(ZERO) {
-                    let imm8 = self.fetch_byte(mmu);
                     self.jr(imm8)
                 }
             } // JR Z,imm8
             0x30 => {
+                let imm8 = self.fetch_byte(mmu);
                 if !self.reg.get_flag(CARRY) {
-                    let imm8 = self.fetch_byte(mmu);
                     self.jr(imm8)
                 }
             } // JR NC,imm8
             0x38 => {
+                let imm8 = self.fetch_byte(mmu);
                 if self.reg.get_flag(CARRY) {
-                    let imm8 = self.fetch_byte(mmu);
                     self.jr(imm8)
                 }
             } // JR C,imm8
@@ -1032,23 +1032,27 @@ impl CPU {
 
             // JP cond, imm16
             0xC2 => {
+                let imm16 = self.fetch_word(mmu);
                 if !self.reg.get_flag(ZERO) {
-                    self.reg.pc = self.fetch_word(mmu);
+                    self.reg.pc = imm16;
                 }
             } // JP NZ,imm16
             0xCA => {
+                let imm16 = self.fetch_word(mmu);
                 if self.reg.get_flag(ZERO) {
-                    self.reg.pc = self.fetch_word(mmu);
+                    self.reg.pc = imm16;
                 }
             } // JP Z,imm16
             0xD2 => {
+                let imm16 = self.fetch_word(mmu);
                 if !self.reg.get_flag(CARRY) {
-                    self.reg.pc = self.fetch_word(mmu);
+                    self.reg.pc = imm16;
                 }
             } // JP NC,imm16
             0xDA => {
+                let imm16 = self.fetch_word(mmu);
                 if self.reg.get_flag(CARRY) {
-                    self.reg.pc = self.fetch_word(mmu);
+                    self.reg.pc = imm16;
                 }
             } // JP C,imm16
 
@@ -1060,26 +1064,26 @@ impl CPU {
 
             // CALL cond, imm16
             0xC4 => {
+                let imm16 = self.fetch_word(mmu);
                 if !self.reg.get_flag(ZERO) {
-                    let imm16 = self.fetch_word(mmu);
                     self.call(mmu, imm16);
                 }
             } // CALL NZ,imm16
             0xCC => {
+                let imm16 = self.fetch_word(mmu);
                 if self.reg.get_flag(ZERO) {
-                    let imm16 = self.fetch_word(mmu);
                     self.call(mmu, imm16);
                 }
             } // CALL Z,imm16
             0xD4 => {
+                let imm16 = self.fetch_word(mmu);
                 if !self.reg.get_flag(CARRY) {
-                    let imm16 = self.fetch_word(mmu);
                     self.call(mmu, imm16);
                 }
             } // CALL NC,imm16
             0xDC => {
+                let imm16 = self.fetch_word(mmu);
                 if self.reg.get_flag(CARRY) {
-                    let imm16 = self.fetch_word(mmu);
                     self.call(mmu, imm16);
                 }
             } // CALL C,imm16
