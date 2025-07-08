@@ -626,6 +626,7 @@ impl CPU {
 
     pub fn step(&mut self, mmu: &mut impl MemoryBus) {
         let pc_before = self.reg.pc;
+        self.log_state(mmu, pc_before);
         
         let opcode = self.fetch_byte(mmu);
         match opcode {
@@ -1604,7 +1605,5 @@ impl CPU {
 
             _ => panic!("Unknown opcode: 0x{:02X}", opcode),
         }
-
-        self.log_state(mmu, pc_before);
     }
 }
