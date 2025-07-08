@@ -105,6 +105,7 @@ impl MMU {
             0xFF07 => self.timer.tac,
             0xFF0F => self.interrupt_flag,
             0xFF10..=0xFF3F => self.apu.read_byte(address),
+            0xFF40..=0xFF4B => self.ppu.read_byte(address),
             _ => 0,
         }
     }
@@ -120,6 +121,7 @@ impl MMU {
             0xFF07 => self.timer.tac = value,
             0xFF0F => self.interrupt_flag = value,
             0xFF10..=0xFF3F => self.apu.write_byte(address, value),
+            0xFF40..=0xFF4B => self.ppu.write_byte(address, value),
             _ => (),
         }
     }
