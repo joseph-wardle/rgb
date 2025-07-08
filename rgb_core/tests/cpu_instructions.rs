@@ -127,7 +127,7 @@ fn test_10_bit_ops() {
 
 #[test]
 fn test_11_op_a_hl() {
-    let out = run_rom(&rom_path("11-op a,(hl).gbv"));
+    let out = run_rom(&rom_path("11-op a,(hl).gb"));
     assert!(out.contains("Passed"), "{}", out);
 }
 
