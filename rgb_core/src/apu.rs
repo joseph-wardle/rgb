@@ -10,9 +10,9 @@ impl APU {
 
 impl Memory for APU {
     fn read_byte(&self, address: u16) -> u8 {
-        todo!()
+        0 // todo!()
     }
     fn write_byte(&mut self, address: u16, value: u8) {
-        todo!()
+        // todo!()
     }
 }

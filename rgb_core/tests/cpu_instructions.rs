@@ -49,7 +49,7 @@ impl Cartridge for TestCartridge {}
 fn run_rom(path: &str) -> String {
     let data = fs::read(path).expect("read rom");
     let rom = Box::new(TestCartridge::new(data));
-    let mut gb = DMG::new_post_bios(rom);
+    let mut gb = DMG::new(rom);
     gb.run_until(|s| {
         let out = s.output_string();
         out.contains("Passed") || out.contains("Failed")
@@ -65,6 +65,17 @@ fn rom_path(name: &str) -> String {
     )
 }
 
+#[test]
+fn test_01_special() {
+    let out = run_rom(&rom_path("01-special.gb"));
+    assert!(out.contains("Passed"), "{}", out);
+}
+
+#[test]
+fn test_02_interrupts() {
+    let out = run_rom(&rom_path("02-interrupts.gb"));
+    assert!(out.contains("Passed"), "{}", out);
+}
 
 #[test]
 fn test_03_op_sp_hl() {
@@ -72,15 +83,51 @@ fn test_03_op_sp_hl() {
     assert!(out.contains("Passed"), "{}", out);
 }
 
+#[test]
+fn test_04_op_r_imm() {
+    let out = run_rom(&rom_path("04-op r,imm.gb"));
+    assert!(out.contains("Passed"), "{}", out);
+}
 
-// cpu_test!(test_01_special, "01-special.gb");
-// cpu_test!(test_02_interrupts, "02-interrupts.gb");
-// cpu_test!(test_03_op_sp_hl, "03-op sp,hl.gb");
-// cpu_test!(test_04_op_r_imm, "04-op r,imm.gb");
-// cpu_test!(test_05_op_rp, "05-op rp.gb");
-// cpu_test!(test_06_ld_r_r, "06-ld r,r.gb");
-// cpu_test!(test_07_jr_jp_call_ret_rst, "07-jr,jp,call,ret,rst.gb");
-// cpu_test!(test_08_misc_instrs, "08-misc instrs.gb");
-// cpu_test!(test_09_op_r_r, "09-op r,r.gb");
-// cpu_test!(test_10_bit_ops, "10-bit ops.gb");
-// cpu_test!(test_11_op_a_hl, "11-op a,(hl).gb");
+#[test]
+fn test_05_op_rp() {
+    let out = run_rom(&rom_path("05-op rp.gb"));
+    assert!(out.contains("Passed"), "{}", out);
+}
+
+#[test]
+fn test_06_ld_r_r() {
+    let out = run_rom(&rom_path("06-ld r,r.gb"));
+    assert!(out.contains("Passed"), "{}", out);
+}
+
+#[test]
+fn test_07_jr_jp_call_ret_rst() {
+    let out = run_rom(&rom_path("07-jr,jp,call,ret,rst.gb"));
+    assert!(out.contains("Passed"), "{}", out);
+}
+
+#[test]
+fn test_08_misc_instrs() {
+    let out = run_rom(&rom_path("08-misc instrs.gb"));
+    assert!(out.contains("Passed"), "{}", out);
+}
+
+#[test]
+fn test_09_op_r_r() {
+    let out = run_rom(&rom_path("09-op r,r.gb"));
+    assert!(out.contains("Passed"), "{}", out);
+}
+
+#[test]
+fn test_10_bit_ops() {
+    let out = run_rom(&rom_path("10-bit ops.gb"));
+    assert!(out.contains("Passed"), "{}", out);
+}
+
+#[test]
+fn test_11_op_a_hl() {
+    let out = run_rom(&rom_path("11-op a,(hl).gbv"));
+    assert!(out.contains("Passed"), "{}", out);
+}
+
