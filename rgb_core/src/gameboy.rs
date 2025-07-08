@@ -33,10 +33,11 @@ impl DMG {
     
     pub fn step_frame(&mut self) {
         self.cpu.step(&mut self.bus);
+        self.bus.step(16);
+        self.cpu.service_interrupts(&mut self.bus);
         // self.ppu.step(c, &mut self.bus);
         // self.timer.step(c, &mut self.bus);
         // self.apu.step(c);
-        // self.cpu.service_interrupts(&mut self.bus);
         // cycles_this_frame += c;
     }
 

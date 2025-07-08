@@ -625,6 +625,15 @@ impl CPU {
     }
 
     pub fn step(&mut self, mmu: &mut impl MemoryBus) {
+        if self.halted {
+            let pending = mmu.read_byte(0xFFFF) & mmu.read_byte(0xFF0F);
+            if pending == 0 {
+                return;
+            } else {
+                self.halted = false;
+            }
+        }
+        
         // let pc_before = self.reg.pc;
         // self.log_state(mmu, pc_before);
         
@@ -1608,6 +1617,40 @@ impl CPU {
             }
 
             _ => panic!("Unknown opcode: 0x{:02X}", opcode),
+        }
+    }
+
+    pub fn service_interrupts(&mut self, mmu: &mut impl MemoryBus) {
+        if !self.ei {
+            return;
+        }
+
+        let ie = mmu.read_byte(0xFFFF);
+        let mut iflag = mmu.read_byte(0xFF0F);
+        let pending = ie & iflag;
+        if pending == 0 {
+            return;
+        }
+
+        self.halted = false;
+        self.ei = false;
+
+        for i in 0..5 {
+            let mask = 1 << i;
+            if pending & mask != 0 {
+                iflag &= !mask;
+                mmu.write_byte(0xFF0F, iflag);
+                self.push(mmu, self.reg.pc);
+                self.reg.pc = match i {
+                    0 => 0x40,
+                    1 => 0x48,
+                    2 => 0x50,
+                    3 => 0x58,
+                    4 => 0x60,
+                    _ => 0x00,
+                };
+                break;
+            }
         }
     }
 }

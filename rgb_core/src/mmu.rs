@@ -11,13 +11,15 @@ pub struct MMU {
     apu: APU,                      // Audio Processing Unit
     ppu: PPU,                      // Graphics Processing Unit
     joypad: Joypad,                // Joypad input
-    pub serial: Serial,                // Serial communication
+    pub serial: Serial,            // Serial communication
     timer: Timer,                  // Timer
+    
 
     // | 7  6  5 |   4    |   3    |   2   |  1  |   0    |
     // | ------- | ------ | ------ | ----- | --- | ------ |
     // |         | Joypad | Serial | Timer | LCD | VBlank |
     interrupt_flag: u8, // Interrupt flag
+    interrupt_enable: u8,
 
     hram: [u8; 0x7F],   // High RAM
     wram: [u8; 0x8000], // Work RAM
@@ -45,11 +47,17 @@ impl MMU {
             timer: Timer::new(),
 
             interrupt_flag: 0x00,
+            interrupt_enable: 0x00,
             hram: [0x00; 0x7F],
             wram: [0x00; 0x8000],
             wram_bank: 1,
         }
     }
+
+    pub fn step(&mut self, cycles: u16) {
+        self.timer.step(cycles, &mut self.interrupt_flag);
+    }
+    
     fn get_memory_region(&self, address: u16) -> MemoryRegion {
         match address {
             0x0000..=0x7FFF => MemoryRegion::Cartridge,
@@ -104,6 +112,7 @@ impl MMU {
             0xFF06 => self.timer.tma,
             0xFF07 => self.timer.tac,
             0xFF0F => self.interrupt_flag,
+            0xFFFF => self.interrupt_enable,
             0xFF10..=0xFF3F => self.apu.read_byte(address),
             0xFF40..=0xFF4B => self.ppu.read_byte(address),
             _ => 0,
@@ -120,6 +129,7 @@ impl MMU {
             0xFF06 => self.timer.tma = value,
             0xFF07 => self.timer.tac = value,
             0xFF0F => self.interrupt_flag = value,
+            0xFFFF => self.interrupt_enable = value,
             0xFF10..=0xFF3F => self.apu.write_byte(address, value),
             0xFF40..=0xFF4B => self.ppu.write_byte(address, value),
             _ => (),

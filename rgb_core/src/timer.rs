@@ -29,6 +29,9 @@ pub struct Timer {
     //
     // Note that writing to this register may increase TIMA once!
     pub tac: u8, // Timer Control
+
+    div_counter: u16,
+    tima_counter: u16,
 }
 
 impl Timer {
@@ -38,6 +41,37 @@ impl Timer {
             tima: 0,
             tma: 0,
             tac: 0,
+            div_counter: 0,
+            tima_counter: 0,
+        }
+    }
+
+    pub fn step(&mut self, cycles: u16, interrupt_flag: &mut u8) {
+        self.div_counter = self.div_counter.wrapping_add(cycles);
+        while self.div_counter >= 256 {
+            self.div_counter -= 256;
+            self.div = self.div.wrapping_add(1);
+        }
+
+        if self.tac & 0b100 != 0 {
+            let threshold = match self.tac & 0b11 {
+                0b00 => 1024,
+                0b01 => 16,
+                0b10 => 64,
+                0b11 => 256,
+                _ => 1024,
+            };
+
+            self.tima_counter = self.tima_counter.wrapping_add(cycles);
+            while self.tima_counter >= threshold {
+                self.tima_counter -= threshold;
+                if self.tima == 0xFF {
+                    self.tima = self.tma;
+                    *interrupt_flag |= 0x04;
+                } else {
+                    self.tima = self.tima.wrapping_add(1);
+                }
+            }
         }
     }
 }
