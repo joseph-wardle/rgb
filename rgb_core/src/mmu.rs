@@ -32,7 +32,6 @@ enum MemoryRegion {
     HRAM,
     IO,
     Unused,
-    Invalid,
 }
 
 impl MMU {
@@ -69,7 +68,6 @@ impl MMU {
             0xFF00..=0xFF7F => MemoryRegion::IO,
             0xFF80..=0xFFFE => MemoryRegion::HRAM,
             0xFFFF => MemoryRegion::IO,
-            _ => MemoryRegion::Invalid,
         }
     }
 
@@ -145,7 +143,6 @@ impl Memory for MMU {
             MemoryRegion::HRAM => self.hram[address as usize - 0xFF80],
             MemoryRegion::IO => self.read_io(address),
             MemoryRegion::Unused => 0,
-            MemoryRegion::Invalid => unreachable!("Invalid memory address: 0x{:04X}", address),
         }
     }
 
@@ -157,7 +154,6 @@ impl Memory for MMU {
             MemoryRegion::HRAM => self.hram[address as usize - 0xFF80] = value,
             MemoryRegion::IO => self.write_io(address, value),
             MemoryRegion::Unused => (),
-            MemoryRegion::Invalid => unreachable!("Invalid memory address: 0x{:04X}", address),
         }
     }
 }

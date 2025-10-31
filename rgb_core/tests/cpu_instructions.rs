@@ -1,5 +1,5 @@
 use rgb_core::gameboy::DMG;
-use rgb_core::{cartridge::Cartridge, cpu::CPU, memory::Memory, mmu::MMU, serial::Serial};
+use rgb_core::{cartridge::Cartridge, memory::Memory};
 use std::fs;
 
 pub struct RomCartridge {

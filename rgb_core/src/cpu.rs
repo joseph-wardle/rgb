@@ -255,12 +255,6 @@ impl CPU {
         result
     }
 
-    // Increment register nn
-    // nn = BC,DE,HL,SP
-    fn inc_word(&mut self, nn: u16) -> u16 {
-        nn.wrapping_add(1)
-    }
-
     // Decrement register n
     // n = A,B,C,D,E,H,L,(HL)
     //
@@ -276,12 +270,6 @@ impl CPU {
         self.reg.set_flag(HALF_CARRY, n & 0x0F == 0x00);
 
         result
-    }
-
-    // Decrement register nn
-    // nn = BC,DE,HL,SP
-    fn dec_word(&mut self, nn: u16) -> u16 {
-        nn.wrapping_sub(1)
     }
 
     // Add n to HL

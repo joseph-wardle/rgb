@@ -5,6 +5,10 @@ use crate::mmu::MMU;
 use crate::ppu::PPU;
 use crate::serial::Serial;
 
+#[expect(
+    dead_code,
+    reason = "PPU is not fully implemented yet, but will be used in the future when rendering is added"
+)]
 pub struct DMG {
     cpu: CPU,
     ppu: PPU,
