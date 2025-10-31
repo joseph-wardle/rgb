@@ -6,8 +6,6 @@
 mod opcode;
 
 use self::opcode::{CycleCost, cb_cycle_cost, cycle_cost};
-use std::fs::OpenOptions;
-use std::io::Write;
 
 use crate::memory::MemoryBus;
 use crate::registers::Flag::{CARRY, HALF_CARRY, SUBTRACT, ZERO};
@@ -74,44 +72,6 @@ pub struct CPU {
 impl Default for CPU {
     fn default() -> Self {
         Self::new()
-    }
-}
-
-impl CPU {
-    fn _log_state(&self, mmu: &impl MemoryBus, pc_snapshot: u16) {
-        // Grab the four bytes starting at the **pre-execute** PC
-        let pc_bytes = [
-            mmu.read_byte(pc_snapshot),
-            mmu.read_byte(pc_snapshot.wrapping_add(1)),
-            mmu.read_byte(pc_snapshot.wrapping_add(2)),
-            mmu.read_byte(pc_snapshot.wrapping_add(3)),
-        ];
-
-        // Assemble the line (upper-case hex, leading zeroes)
-        let line = format!(
-            "A:{:02X} F:{:02X} B:{:02X} C:{:02X} D:{:02X} E:{:02X} H:{:02X} L:{:02X} \
-             SP:{:04X} PC:{:04X} PCMEM:{:02X},{:02X},{:02X},{:02X}\n",
-            self.reg.a,
-            self.reg.f, // assumes `Registers` exposes `.f`
-            self.reg.b,
-            self.reg.c,
-            self.reg.d,
-            self.reg.e,
-            self.reg.h,
-            self.reg.l,
-            self.reg.sp,
-            pc_snapshot,
-            pc_bytes[0],
-            pc_bytes[1],
-            pc_bytes[2],
-            pc_bytes[3],
-        );
-
-        // Append to the log file (create it on first use)
-        if let Ok(mut file) = OpenOptions::new().create(true).append(true).open("cpu.log") {
-            // Ignore I/O errors during tracing; they shouldn’t crash the emulator
-            let _ = file.write_all(line.as_bytes());
-        }
     }
 }
 
