@@ -1,12 +1,17 @@
-pub mod apu;
 pub mod cartridge;
-pub mod cpu;
 pub mod gameboy;
-pub mod input;
 pub mod memory;
-pub mod mmu;
-pub mod ppu;
-pub mod registers;
-pub mod serial;
-pub mod timer;
-pub mod trace;
+
+pub use cpu::CPU;
+pub use registers::Registers;
+pub use serial::Serial;
+
+mod apu;
+mod cpu;
+mod input;
+mod mmu;
+mod ppu;
+mod registers;
+mod serial;
+mod timer;
+mod trace;

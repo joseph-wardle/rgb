@@ -1,16 +1,16 @@
 #[derive(Debug, Default)]
-pub struct Timer {
+pub(crate) struct Timer {
     // This register is incremented at a rate of 16384Hz (~16779Hz on SGB). Writing any value to
     // this register resets it to $00. This register is reset when executing the stop instruction,
     // and begins ticking again once stop mode ends. This also occurs during a speed switch.
-    pub div: u8, // Divider Register
+    pub(crate) div: u8, // Divider Register
 
     // This timer is incremented at the clock frequency specified by the TAC register ($FF07). When
     // it overflows it is reset to the value specified in TMA (FF06) and an interrupt is requested
-    pub tima: u8, // Timer Counter
+    pub(crate) tima: u8, // Timer Counter
 
     // When TIMA overflows, it is reset to the value in this register and an interrupt is requested.
-    pub tma: u8, // Timer Modulo
+    pub(crate) tma: u8, // Timer Modulo
 
     // This register is used to control the timer frequency.
     // | 7  6  5  4  3 |   2    |     1  0     |
@@ -29,14 +29,14 @@ pub struct Timer {
     // | 11           | 64 M-cycles     | 16384 hz               | ~16780 hz  | 32768 hz    |
     //
     // Note that writing to this register may increase TIMA once!
-    pub tac: u8, // Timer Control
+    pub(crate) tac: u8, // Timer Control
 
     div_counter: u16,
     tima_counter: u16,
 }
 
 impl Timer {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Timer {
             div: 0,
             tima: 0,
@@ -47,7 +47,7 @@ impl Timer {
         }
     }
 
-    pub fn step(&mut self, cycles: u16, interrupt_flag: &mut u8) {
+    pub(crate) fn step(&mut self, cycles: u16, interrupt_flag: &mut u8) {
         self.div_counter = self.div_counter.wrapping_add(cycles);
         while self.div_counter >= 256 {
             self.div_counter -= 256;

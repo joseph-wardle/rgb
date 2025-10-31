@@ -8,8 +8,8 @@
 //
 // The mode is selected by writing to the upper nibble of the joypad state byte.
 
-pub struct Joypad {
-    pub state: u8,
+pub(crate) struct Joypad {
+    pub(crate) state: u8,
 }
 
 impl Default for Joypad {
@@ -18,7 +18,11 @@ impl Default for Joypad {
     }
 }
 
-pub enum Button {
+#[expect(
+    dead_code,
+    reason = "Input handling will select buttons once input is wired up"
+)]
+pub(crate) enum Button {
     Start,
     Select,
     B,
@@ -29,11 +33,15 @@ pub enum Button {
     Right,
 }
 
+#[expect(
+    dead_code,
+    reason = "Joypad polling will use these helpers when input is implemented"
+)]
 impl Joypad {
     const SELECT_BUTTONS: u8 = 0b0010_0000;
     const SELECT_DPAD: u8 = 0b0001_0000;
 
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Joypad { state: 0xFF }
     }
 
@@ -45,7 +53,7 @@ impl Joypad {
         }
     }
 
-    pub fn is_pressed(&self, button: Button) -> bool {
+    pub(crate) fn is_pressed(&self, button: Button) -> bool {
         let button_mask = match button {
             Button::Start => 0b0000_1000,
             Button::Select => 0b0000_0100,

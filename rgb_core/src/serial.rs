@@ -27,8 +27,8 @@
 
 #[derive(Debug, Default)]
 pub struct Serial {
-    pub sb: u8, // Serial transfer data
-    pub sc: u8, // Serial transfer control
+    pub(crate) sb: u8, // Serial transfer data
+    pub(crate) sc: u8, // Serial transfer control
     buffer: Vec<u8>,
 }
 
@@ -39,7 +39,7 @@ impl Serial {
 }
 
 impl Serial {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Serial {
             sb: 0,
             sc: 0,
@@ -47,7 +47,7 @@ impl Serial {
         }
     }
 
-    pub fn write_control(&mut self, value: u8) {
+    pub(crate) fn write_control(&mut self, value: u8) {
         self.sc = value;
         if self.sc & 0x80 != 0 {
             self.buffer.push(self.sb);

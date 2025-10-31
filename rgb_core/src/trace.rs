@@ -22,16 +22,17 @@ impl CPU {
     #[inline(always)]
     #[cfg(feature = "trace")]
     pub(crate) fn log_inst_start(&self, pc_before: u16, opcode: u8) {
+        let regs = self.registers();
         trace!(
             target: "gb::cpu",
             pc = %hex16!(pc_before),
             opcode = %hex8!(opcode),
-            a = self.reg.a, b = self.reg.b, c = self.reg.c, d = self.reg.d, e = self.reg.e,
-            h = self.reg.h, l = self.reg.l, sp = %hex16!(self.reg.sp),
-            z = self.reg.get_flag(ZERO),
-            n = self.reg.get_flag(SUBTRACT),
-            hflag = self.reg.get_flag(HALF_CARRY),
-            cflag = self.reg.get_flag(CARRY),
+            a = regs.a, b = regs.b, c = regs.c, d = regs.d, e = regs.e,
+            h = regs.h, l = regs.l, sp = %hex16!(regs.sp),
+            z = regs.get_flag(ZERO),
+            n = regs.get_flag(SUBTRACT),
+            hflag = regs.get_flag(HALF_CARRY),
+            cflag = regs.get_flag(CARRY),
             ime = self.ime,
             halt = ?self.halt_state,
             "fetch"
@@ -45,18 +46,19 @@ impl CPU {
     #[inline(always)]
     #[cfg(feature = "trace")]
     pub(crate) fn log_inst_done(&self, opcode: u8, cycles: u8, took_conditional: bool) {
+        let regs = self.registers();
         trace!(
             target: "gb::cpu",
-            pc_after = %hex16!(self.reg.pc),
+            pc_after = %hex16!(regs.pc),
             opcode = %hex8!(opcode),
             cycles = cycles,
             conditional = took_conditional,
-            a = self.reg.a, b = self.reg.b, c = self.reg.c, d = self.reg.d, e = self.reg.e,
-            h = self.reg.h, l = self.reg.l, sp = %hex16!(self.reg.sp),
-            z = self.reg.get_flag(ZERO),
-            n = self.reg.get_flag(SUBTRACT),
-            hflag = self.reg.get_flag(HALF_CARRY),
-            cflag = self.reg.get_flag(CARRY),
+            a = regs.a, b = regs.b, c = regs.c, d = regs.d, e = regs.e,
+            h = regs.h, l = regs.l, sp = %hex16!(regs.sp),
+            z = regs.get_flag(ZERO),
+            n = regs.get_flag(SUBTRACT),
+            hflag = regs.get_flag(HALF_CARRY),
+            cflag = regs.get_flag(CARRY),
             ime = self.ime,
             halt = ?self.halt_state,
             "exec"
@@ -70,7 +72,7 @@ impl CPU {
     #[inline(always)]
     #[cfg(feature = "trace")]
     pub(crate) fn log_halt_enter(&self) {
-        debug!(target: "gb::cpu", pc = %hex16!(self.reg.pc), "HALT entered");
+        debug!(target: "gb::cpu", pc = %hex16!(self.registers().pc), "HALT entered");
     }
 
     #[inline(always)]
@@ -80,7 +82,7 @@ impl CPU {
     #[inline(always)]
     #[cfg(feature = "trace")]
     pub(crate) fn log_halt_wake(&self) {
-        debug!(target: "gb::cpu", pc = %hex16!(self.reg.pc), "HALT woken by pending interrupt");
+        debug!(target: "gb::cpu", pc = %hex16!(self.registers().pc), "HALT woken by pending interrupt");
     }
 
     #[inline(always)]
@@ -90,9 +92,10 @@ impl CPU {
     #[inline(always)]
     #[cfg(feature = "trace")]
     pub(crate) fn log_undocumented(&self, opcode: u8) {
+        let regs = self.registers();
         warn!(
             target: "gb::cpu",
-            pc = %hex16!(self.reg.pc.wrapping_sub(1)),
+            pc = %hex16!(regs.pc.wrapping_sub(1)),
             opcode = %hex8!(opcode),
             "undocumented opcode (acts as NOP)"
         );
@@ -105,10 +108,11 @@ impl CPU {
     #[inline(always)]
     #[cfg(feature = "trace")]
     pub(crate) fn log_interrupt_service(&self, vector: u16, index: u8) {
+        let regs = self.registers();
         debug!(
             target: "gb::cpu",
-            pc = %hex16!(self.reg.pc),
-            sp = %hex16!(self.reg.sp),
+            pc = %hex16!(regs.pc),
+            sp = %hex16!(regs.sp),
             vector = %hex16!(vector),
             index = index,
             "servicing interrupt"

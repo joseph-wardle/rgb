@@ -13,7 +13,7 @@ pub struct DMG {
     cpu: CPU,
     ppu: PPU,
     apu: APU,
-    pub bus: MMU,
+    bus: MMU,
 }
 
 impl DMG {
@@ -59,7 +59,7 @@ impl DMG {
     {
         for _ in 0..max_steps {
             self.step_frame();
-            if condition(&self.bus.serial) {
+            if condition(self.bus.serial()) {
                 break;
             }
         }
@@ -69,7 +69,11 @@ impl DMG {
         &self.cpu
     }
 
-    pub fn cpu_mut(&mut self) -> &mut CPU {
-        &mut self.cpu
+    pub fn serial(&self) -> &Serial {
+        self.bus.serial()
+    }
+
+    pub fn serial_output(&self) -> String {
+        self.bus.serial().output_string()
     }
 }

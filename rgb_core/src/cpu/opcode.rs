@@ -5,14 +5,14 @@
 //! against documentation while letting the execution engine focus purely on behaviour.
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub struct CycleCost {
+pub(super) struct CycleCost {
     base: u8,
     taken: Option<u8>,
 }
 
 impl CycleCost {
     /// Returns a cost for instructions that always consume the same number of cycles.
-    pub const fn fixed(cycles: u8) -> Self {
+    pub(super) const fn fixed(cycles: u8) -> Self {
         Self {
             base: cycles,
             taken: None,
@@ -20,7 +20,7 @@ impl CycleCost {
     }
 
     /// Returns a cost for instructions whose duration depends on a branching condition.
-    pub const fn branch(not_taken: u8, taken: u8) -> Self {
+    pub(super) const fn branch(not_taken: u8, taken: u8) -> Self {
         Self {
             base: not_taken,
             taken: Some(taken),
@@ -28,7 +28,7 @@ impl CycleCost {
     }
 
     /// Marks an opcode that is undocumented / illegal on real hardware.
-    pub const fn illegal() -> Self {
+    pub(super) const fn illegal() -> Self {
         Self {
             base: 0,
             taken: None,
@@ -36,7 +36,7 @@ impl CycleCost {
     }
 
     /// Computes the total cycles consumed, accounting for conditional branches.
-    pub const fn total(self, took_conditional: bool) -> u8 {
+    pub(super) const fn total(self, took_conditional: bool) -> u8 {
         match (took_conditional, self.taken) {
             (true, Some(taken)) => taken,
             _ => self.base,
@@ -45,17 +45,17 @@ impl CycleCost {
 }
 
 /// Returns the timing information for an unprefixed opcode (0x00-0xFF).
-pub fn cycle_cost(opcode: u8) -> CycleCost {
+pub(super) fn cycle_cost(opcode: u8) -> CycleCost {
     MAIN_CYCLE_COSTS[opcode as usize]
 }
 
 /// Returns the timing information for a CB-prefixed opcode (0x00-0xFF).
-pub fn cb_cycle_cost(opcode: u8) -> CycleCost {
+pub(super) fn cb_cycle_cost(opcode: u8) -> CycleCost {
     CB_CYCLE_COSTS[opcode as usize]
 }
 
 /// Lookup table for the 256 unprefixed opcodes.
-pub const MAIN_CYCLE_COSTS: [CycleCost; 256] = [
+pub(super) const MAIN_CYCLE_COSTS: [CycleCost; 256] = [
     CycleCost::fixed(4),       // 0x00: NOP
     CycleCost::fixed(12),      // 0x01: LD BC, n16
     CycleCost::fixed(8),       // 0x02: LD [BC], A
@@ -315,7 +315,7 @@ pub const MAIN_CYCLE_COSTS: [CycleCost; 256] = [
 ];
 
 /// Lookup table for the 256 CB-prefixed opcodes.
-pub const CB_CYCLE_COSTS: [CycleCost; 256] = [
+pub(super) const CB_CYCLE_COSTS: [CycleCost; 256] = [
     CycleCost::fixed(8),  // 0xCB00: RLC B
     CycleCost::fixed(8),  // 0xCB01: RLC C
     CycleCost::fixed(8),  // 0xCB02: RLC D

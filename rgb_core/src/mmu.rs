@@ -6,12 +6,13 @@ use crate::ppu::PPU;
 use crate::serial::Serial;
 use crate::timer::Timer;
 
-pub struct MMU {
+#[expect(clippy::upper_case_acronyms)]
+pub(crate) struct MMU {
     cartridge: Box<dyn Cartridge>, // Cartridge memory
     apu: APU,                      // Audio Processing Unit
     ppu: PPU,                      // Graphics Processing Unit
     joypad: Joypad,                // Joypad input
-    pub serial: Serial,            // Serial communication
+    serial: Serial,                // Serial communication
     timer: Timer,                  // Timer
 
     // | 7  6  5 |   4    |   3    |   2   |  1  |   0    |
@@ -36,7 +37,7 @@ enum MemoryRegion {
 }
 
 impl MMU {
-    pub fn new(cartridge: Box<dyn Cartridge>) -> Self {
+    pub(crate) fn new(cartridge: Box<dyn Cartridge>) -> Self {
         MMU {
             cartridge,
             apu: APU::new(),
@@ -53,7 +54,7 @@ impl MMU {
         }
     }
 
-    pub fn step(&mut self, cycles: u16) {
+    pub(crate) fn step(&mut self, cycles: u16) {
         self.timer.step(cycles, &mut self.interrupt_flag);
     }
 
@@ -160,3 +161,9 @@ impl Memory for MMU {
 }
 
 impl MemoryBus for MMU {}
+
+impl MMU {
+    pub(crate) fn serial(&self) -> &Serial {
+        &self.serial
+    }
+}

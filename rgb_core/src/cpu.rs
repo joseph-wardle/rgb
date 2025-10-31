@@ -62,7 +62,7 @@ impl CycleResult {
 }
 
 pub struct CPU {
-    pub reg: Registers,
+    reg: Registers,
     clock: Clock,
     pub(crate) halt_state: HaltState,
     pub(crate) ime: bool,
@@ -117,7 +117,7 @@ impl CPU {
     // SUBTRACT   - Reset
     // HALF_CARRY - Set if carry from bit 3
     // CARRY      - Set if carry from bit 7
-    pub fn add(&mut self, n: u8) {
+    fn add(&mut self, n: u8) {
         let a = self.reg.a;
         let result = a.wrapping_add(n);
 
@@ -366,7 +366,7 @@ impl CPU {
     // SUBTRACT   - Not affected
     // HALF_CARRY - Reset
     // CARRY      - Set or reset according to operation
-    pub fn daa(&mut self) {
+    fn daa(&mut self) {
         let mut a = self.reg.a;
         let mut adjust = 0;
         let mut carry = self.reg.get_flag(CARRY);
@@ -610,7 +610,7 @@ impl CPU {
 }
 
 impl CPU {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             reg: Registers::new(),
             clock: Clock::default(),
@@ -620,7 +620,7 @@ impl CPU {
         }
     }
 
-    pub fn new_post_bios() -> Self {
+    pub(crate) fn new_post_bios() -> Self {
         Self {
             reg: Registers::new_post_bios(),
             clock: Clock::default(),
@@ -630,7 +630,7 @@ impl CPU {
         }
     }
 
-    pub fn step(&mut self, mmu: &mut impl MemoryBus) -> u8 {
+    pub(crate) fn step(&mut self, mmu: &mut impl MemoryBus) -> u8 {
         if let Some(cycles) = self.step_halt_state(mmu) {
             self.clock.record(cycles);
             self.advance_ime_schedule();
@@ -654,6 +654,10 @@ impl CPU {
 
     pub fn last_cycles(&self) -> u8 {
         self.clock.last()
+    }
+
+    pub fn registers(&self) -> &Registers {
+        &self.reg
     }
 
     fn execute_opcode(&mut self, opcode: u8, mmu: &mut impl MemoryBus) -> CycleResult {
@@ -1725,7 +1729,7 @@ impl CPU {
         }
     }
 
-    pub fn service_interrupts(&mut self, mmu: &mut impl MemoryBus) -> Option<u8> {
+    pub(crate) fn service_interrupts(&mut self, mmu: &mut impl MemoryBus) -> Option<u8> {
         let ie = mmu.read_byte(0xFFFF);
         let mut iflag = mmu.read_byte(0xFF0F);
         let pending = ie & iflag;
