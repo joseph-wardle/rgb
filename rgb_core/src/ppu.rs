@@ -1,6 +1,7 @@
 use crate::memory::Memory;
 
-pub struct PPU {
+#[expect(clippy::upper_case_acronyms)]
+pub(crate) struct PPU {
     vram: [u8; 0x2000], // Video RAM
     oam: [u8; 0xA0],    // Object Attribute Memory
     lcd_control: u8,    // LCD Control Register
@@ -24,7 +25,7 @@ impl Default for PPU {
 }
 
 impl PPU {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         PPU {
             vram: [0; 0x2000],
             oam: [0; 0xA0],

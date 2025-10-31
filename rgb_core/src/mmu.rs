@@ -6,12 +6,13 @@ use crate::ppu::PPU;
 use crate::serial::Serial;
 use crate::timer::Timer;
 
-pub struct MMU {
+#[expect(clippy::upper_case_acronyms)]
+pub(crate) struct MMU {
     cartridge: Box<dyn Cartridge>, // Cartridge memory
     apu: APU,                      // Audio Processing Unit
     ppu: PPU,                      // Graphics Processing Unit
     joypad: Joypad,                // Joypad input
-    pub serial: Serial,            // Serial communication
+    serial: Serial,                // Serial communication
     timer: Timer,                  // Timer
 
     // | 7  6  5 |   4    |   3    |   2   |  1  |   0    |
@@ -36,7 +37,7 @@ enum MemoryRegion {
 }
 
 impl MMU {
-    pub fn new(cartridge: Box<dyn Cartridge>) -> Self {
+    pub(crate) fn new(cartridge: Box<dyn Cartridge>) -> Self {
         MMU {
             cartridge,
             apu: APU::new(),
@@ -53,8 +54,17 @@ impl MMU {
         }
     }
 
-    pub fn step(&mut self, cycles: u16) {
+    pub(crate) fn step(&mut self, cycles: u16) {
         self.timer.step(cycles, &mut self.interrupt_flag);
+        self.log_step(
+            cycles,
+            self.timer.div,
+            self.timer.tima,
+            self.timer.tma,
+            self.timer.tac,
+            self.interrupt_flag,
+            self.interrupt_enable,
+        );
     }
 
     fn get_memory_region(&self, address: u16) -> MemoryRegion {
@@ -101,7 +111,7 @@ impl MMU {
     }
 
     fn read_io(&self, address: u16) -> u8 {
-        match address {
+        let value = match address {
             0xFF00 => self.joypad.state,
             0xFF01 => self.serial.sb,
             0xFF02 => self.serial.sc,
@@ -114,13 +124,15 @@ impl MMU {
             0xFF10..=0xFF3F => self.apu.read_byte(address),
             0xFF40..=0xFF4B => self.ppu.read_byte(address),
             _ => 0,
-        }
+        };
+        self.log_io_read(address, value);
+        value
     }
 
     fn write_io(&mut self, address: u16, value: u8) {
         match address {
-            0xFF00 => self.joypad.state = (self.joypad.state & 0x0F) | (value & 0xF0),
-            0xFF01 => self.serial.sb = value,
+            0xFF00 => self.joypad.write_select(value),
+            0xFF01 => self.serial.write_data(value),
             0xFF02 => self.serial.write_control(value),
             0xFF04 => self.timer.div = 0,
             0xFF05 => self.timer.tima = value,
@@ -132,6 +144,7 @@ impl MMU {
             0xFF40..=0xFF4B => self.ppu.write_byte(address, value),
             _ => (),
         }
+        self.log_io_write(address, value);
     }
 }
 
@@ -160,3 +173,9 @@ impl Memory for MMU {
 }
 
 impl MemoryBus for MMU {}
+
+impl MMU {
+    pub(crate) fn serial(&self) -> &Serial {
+        &self.serial
+    }
+}

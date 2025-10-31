@@ -1,10 +1,11 @@
 use crate::memory::Memory;
 
 #[derive(Debug, Default)]
-pub struct APU {}
+#[expect(clippy::upper_case_acronyms)]
+pub(crate) struct APU {}
 
 impl APU {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         APU {}
     }
 }

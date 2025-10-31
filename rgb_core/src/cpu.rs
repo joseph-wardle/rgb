@@ -6,8 +6,6 @@
 mod opcode;
 
 use self::opcode::{CycleCost, cb_cycle_cost, cycle_cost};
-use std::fs::OpenOptions;
-use std::io::Write;
 
 use crate::memory::MemoryBus;
 use crate::registers::Flag::{CARRY, HALF_CARRY, SUBTRACT, ZERO};
@@ -29,7 +27,7 @@ impl Clock {
 }
 
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
-enum HaltState {
+pub(crate) enum HaltState {
     #[default]
     Running,
     Halted,
@@ -64,54 +62,16 @@ impl CycleResult {
 }
 
 pub struct CPU {
-    pub reg: Registers,
+    reg: Registers,
     clock: Clock,
-    halt_state: HaltState,
-    ime: bool,
-    ime_scheduled: Option<u8>,
+    pub(crate) halt_state: HaltState,
+    pub(crate) ime: bool,
+    pub(crate) ime_scheduled: Option<u8>,
 }
 
 impl Default for CPU {
     fn default() -> Self {
         Self::new()
-    }
-}
-
-impl CPU {
-    fn _log_state(&self, mmu: &impl MemoryBus, pc_snapshot: u16) {
-        // Grab the four bytes starting at the **pre-execute** PC
-        let pc_bytes = [
-            mmu.read_byte(pc_snapshot),
-            mmu.read_byte(pc_snapshot.wrapping_add(1)),
-            mmu.read_byte(pc_snapshot.wrapping_add(2)),
-            mmu.read_byte(pc_snapshot.wrapping_add(3)),
-        ];
-
-        // Assemble the line (upper-case hex, leading zeroes)
-        let line = format!(
-            "A:{:02X} F:{:02X} B:{:02X} C:{:02X} D:{:02X} E:{:02X} H:{:02X} L:{:02X} \
-             SP:{:04X} PC:{:04X} PCMEM:{:02X},{:02X},{:02X},{:02X}\n",
-            self.reg.a,
-            self.reg.f, // assumes `Registers` exposes `.f`
-            self.reg.b,
-            self.reg.c,
-            self.reg.d,
-            self.reg.e,
-            self.reg.h,
-            self.reg.l,
-            self.reg.sp,
-            pc_snapshot,
-            pc_bytes[0],
-            pc_bytes[1],
-            pc_bytes[2],
-            pc_bytes[3],
-        );
-
-        // Append to the log file (create it on first use)
-        if let Ok(mut file) = OpenOptions::new().create(true).append(true).open("cpu.log") {
-            // Ignore I/O errors during tracing; they shouldn’t crash the emulator
-            let _ = file.write_all(line.as_bytes());
-        }
     }
 }
 
@@ -157,7 +117,7 @@ impl CPU {
     // SUBTRACT   - Reset
     // HALF_CARRY - Set if carry from bit 3
     // CARRY      - Set if carry from bit 7
-    pub fn add(&mut self, n: u8) {
+    fn add(&mut self, n: u8) {
         let a = self.reg.a;
         let result = a.wrapping_add(n);
 
@@ -406,7 +366,7 @@ impl CPU {
     // SUBTRACT   - Not affected
     // HALF_CARRY - Reset
     // CARRY      - Set or reset according to operation
-    pub fn daa(&mut self) {
+    fn daa(&mut self) {
         let mut a = self.reg.a;
         let mut adjust = 0;
         let mut carry = self.reg.get_flag(CARRY);
@@ -650,7 +610,7 @@ impl CPU {
 }
 
 impl CPU {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             reg: Registers::new(),
             clock: Clock::default(),
@@ -660,7 +620,7 @@ impl CPU {
         }
     }
 
-    pub fn new_post_bios() -> Self {
+    pub(crate) fn new_post_bios() -> Self {
         Self {
             reg: Registers::new_post_bios(),
             clock: Clock::default(),
@@ -670,16 +630,23 @@ impl CPU {
         }
     }
 
-    pub fn step(&mut self, mmu: &mut impl MemoryBus) -> u8 {
+    pub(crate) fn step(&mut self, mmu: &mut impl MemoryBus) -> u8 {
         if let Some(cycles) = self.step_halt_state(mmu) {
             self.clock.record(cycles);
             self.advance_ime_schedule();
             return cycles;
         }
 
+        let pc_before = self.reg.pc;
         let opcode = self.fetch_byte(mmu);
+
+        self.log_inst_start(pc_before, opcode);
+
         let cycles = self.execute_opcode(opcode, mmu);
         let total = cycles.total();
+
+        self.log_inst_done(opcode, total, cycles.took_conditional);
+
         self.clock.record(total);
         self.advance_ime_schedule();
         total
@@ -687,6 +654,10 @@ impl CPU {
 
     pub fn last_cycles(&self) -> u8 {
         self.clock.last()
+    }
+
+    pub fn registers(&self) -> &Registers {
+        &self.reg
     }
 
     fn execute_opcode(&mut self, opcode: u8, mmu: &mut impl MemoryBus) -> CycleResult {
@@ -969,7 +940,10 @@ impl CPU {
             0x7F => { /* LD A,A – no effect */ } // LD A,A
 
             // HALT
-            0x76 => self.halt_state = HaltState::Halted, // HALT
+            0x76 => {
+                self.halt_state = HaltState::Halted;
+                self.log_halt_enter();
+            } // HALT
 
             // ADD A, r8
             0x80 => self.add(self.reg.b), // ADD A,B
@@ -1714,6 +1688,7 @@ impl CPU {
 
             _ => {
                 // Undocumented opcodes act as NOPs on the DMG.
+                self.log_undocumented(opcode);
             }
         }
     }
@@ -1725,6 +1700,7 @@ impl CPU {
 
         if self.interrupts_pending(mmu) {
             self.halt_state = HaltState::Running;
+            self.log_halt_wake();
             None
         } else {
             Some(4)
@@ -1746,13 +1722,14 @@ impl CPU {
             if remaining == 0 {
                 self.ime = true;
                 self.ime_scheduled = None;
+                self.log_ime_enabled();
             } else {
                 self.ime_scheduled = Some(remaining - 1);
             }
         }
     }
 
-    pub fn service_interrupts(&mut self, mmu: &mut impl MemoryBus) -> Option<u8> {
+    pub(crate) fn service_interrupts(&mut self, mmu: &mut impl MemoryBus) -> Option<u8> {
         let ie = mmu.read_byte(0xFFFF);
         let mut iflag = mmu.read_byte(0xFF0F);
         let pending = ie & iflag;
@@ -1777,7 +1754,7 @@ impl CPU {
                 iflag &= !mask;
                 mmu.write_byte(0xFF0F, iflag);
                 self.push(mmu, self.reg.pc);
-                self.reg.pc = match i {
+                let vector = match i {
                     0 => 0x40,
                     1 => 0x48,
                     2 => 0x50,
@@ -1785,6 +1762,8 @@ impl CPU {
                     4 => 0x60,
                     _ => 0x00,
                 };
+                self.reg.pc = vector;
+                self.log_interrupt_service(vector, i);
                 return Some(20);
             }
         }

@@ -54,7 +54,7 @@ fn run_rom(path: &str) -> String {
         },
         10_000_000,
     );
-    gb.bus.serial.output_string()
+    gb.serial_output()
 }
 
 fn rom_path(name: &str) -> String {
