@@ -1,6 +1,6 @@
-use std::fs;
-use rgb_core::{cpu::CPU, mmu::MMU, serial::Serial, cartridge::Cartridge, memory::Memory};
 use rgb_core::gameboy::DMG;
+use rgb_core::{cartridge::Cartridge, cpu::CPU, memory::Memory, mmu::MMU, serial::Serial};
+use std::fs;
 
 pub struct RomCartridge {
     data: Vec<u8>,
@@ -23,7 +23,6 @@ impl Memory for RomCartridge {
 
 impl Cartridge for RomCartridge {}
 
-
 struct TestCartridge(RomCartridge);
 
 impl TestCartridge {
@@ -44,16 +43,17 @@ impl Memory for TestCartridge {
 
 impl Cartridge for TestCartridge {}
 
-
-
 fn run_rom(path: &str) -> String {
     let data = fs::read(path).expect("read rom");
     let rom = Box::new(TestCartridge::new(data));
     let mut gb = DMG::new(rom);
-    gb.run_until(|s| {
-        let out = s.output_string();
-        out.contains("Passed") || out.contains("Failed")
-    }, 10_000_000);
+    gb.run_until(
+        |s| {
+            let out = s.output_string();
+            out.contains("Passed") || out.contains("Failed")
+        },
+        10_000_000,
+    );
     gb.bus.serial.output_string()
 }
 
@@ -130,4 +130,3 @@ fn test_11_op_a_hl() {
     let out = run_rom(&rom_path("11-op a,(hl).gb"));
     assert!(out.contains("Passed"), "{}", out);
 }
-

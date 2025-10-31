@@ -21,7 +21,7 @@ impl DMG {
             bus: MMU::new(cartridge),
         }
     }
-    
+
     pub fn new_post_bios(cartridge: Box<dyn Cartridge>) -> Self {
         Self {
             cpu: CPU::new_post_bios(),
@@ -30,7 +30,7 @@ impl DMG {
             bus: MMU::new(cartridge),
         }
     }
-    
+
     pub fn step_frame(&mut self) {
         self.cpu.step(&mut self.bus);
         self.bus.step(16);

@@ -26,7 +26,7 @@ impl CPU {
             "A:{:02X} F:{:02X} B:{:02X} C:{:02X} D:{:02X} E:{:02X} H:{:02X} L:{:02X} \
              SP:{:04X} PC:{:04X} PCMEM:{:02X},{:02X},{:02X},{:02X}\n",
             self.reg.a,
-            self.reg.f,        // assumes `Registers` exposes `.f`
+            self.reg.f, // assumes `Registers` exposes `.f`
             self.reg.b,
             self.reg.c,
             self.reg.d,
@@ -42,11 +42,7 @@ impl CPU {
         );
 
         // Append to the log file (create it on first use)
-        if let Ok(mut file) = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open("cpu.log")
-        {
+        if let Ok(mut file) = OpenOptions::new().create(true).append(true).open("cpu.log") {
             // Ignore I/O errors during tracing; they shouldn’t crash the emulator
             let _ = file.write_all(line.as_bytes());
         }
@@ -101,7 +97,8 @@ impl CPU {
 
         self.reg.set_flag(ZERO, result == 0);
         self.reg.set_flag(SUBTRACT, false);
-        self.reg.set_flag(HALF_CARRY, (a & 0x0F) + (n & 0x0F) > 0x0F);
+        self.reg
+            .set_flag(HALF_CARRY, (a & 0x0F) + (n & 0x0F) > 0x0F);
         self.reg.set_flag(CARRY, (a as u16) + (n as u16) > 0xFF);
 
         self.reg.a = result;
@@ -121,8 +118,10 @@ impl CPU {
 
         self.reg.set_flag(ZERO, result == 0);
         self.reg.set_flag(SUBTRACT, false);
-        self.reg.set_flag(HALF_CARRY, (a & 0x0F) + (n & 0x0F) + carry > 0x0F);
-        self.reg.set_flag(CARRY, (a as u16) + (n as u16) + carry as u16 > 0xFF);
+        self.reg
+            .set_flag(HALF_CARRY, (a & 0x0F) + (n & 0x0F) + carry > 0x0F);
+        self.reg
+            .set_flag(CARRY, (a as u16) + (n as u16) + carry as u16 > 0xFF);
 
         self.reg.a = result;
     }
@@ -160,8 +159,10 @@ impl CPU {
 
         self.reg.set_flag(ZERO, result == 0);
         self.reg.set_flag(SUBTRACT, true);
-        self.reg.set_flag(HALF_CARRY, (a & 0x0F) < (n & 0x0F) + carry);
-        self.reg.set_flag(CARRY, (a as u16) < (n as u16) + carry as u16);
+        self.reg
+            .set_flag(HALF_CARRY, (a & 0x0F) < (n & 0x0F) + carry);
+        self.reg
+            .set_flag(CARRY, (a as u16) < (n as u16) + carry as u16);
 
         self.reg.a = result;
     }
@@ -295,7 +296,8 @@ impl CPU {
         let result = hl.wrapping_add(n);
 
         self.reg.set_flag(SUBTRACT, false);
-        self.reg.set_flag(HALF_CARRY, (hl & 0x0FFF) + (n & 0x0FFF) > 0x0FFF);
+        self.reg
+            .set_flag(HALF_CARRY, (hl & 0x0FFF) + (n & 0x0FFF) > 0x0FFF);
         self.reg.set_flag(CARRY, (hl as u32) + (n as u32) > 0xFFFF);
 
         self.reg.set_hl(result);
@@ -316,8 +318,10 @@ impl CPU {
         self.reg.set_flag(ZERO, false);
         self.reg.set_flag(SUBTRACT, false);
 
-        self.reg.set_flag(HALF_CARRY, (sp & 0x000F) + (n & 0x000F) > 0x000F);
-        self.reg.set_flag(CARRY, (sp & 0x00FF) + (n & 0x00FF) > 0x00FF);
+        self.reg
+            .set_flag(HALF_CARRY, (sp & 0x000F) + (n & 0x000F) > 0x000F);
+        self.reg
+            .set_flag(CARRY, (sp & 0x00FF) + (n & 0x00FF) > 0x00FF);
 
         self.reg.sp = result;
     }
@@ -599,7 +603,7 @@ impl CPU {
             ei: false,
         }
     }
-    
+
     pub fn new_post_bios() -> Self {
         Self {
             reg: Registers::new_post_bios(),
@@ -617,10 +621,10 @@ impl CPU {
                 self.halted = false;
             }
         }
-        
+
         // let pc_before = self.reg.pc;
         // self.log_state(mmu, pc_before);
-        
+
         let opcode = self.fetch_byte(mmu);
         match opcode {
             // NOP
@@ -859,7 +863,7 @@ impl CPU {
             0x7C => self.reg.a = self.reg.h, // LD A,H
             0x7D => self.reg.a = self.reg.l, // LD A,L
             0x7E => self.reg.a = mmu.read_byte(self.reg.get_hl()), // LD A,(HL)
-            0x7F => {/* LD A,A – no effect */}, // LD A,A
+            0x7F => { /* LD A,A – no effect */ } // LD A,A
 
             // HALT
             0x76 => self.halted = true, // HALT
@@ -897,14 +901,14 @@ impl CPU {
             } // ADC A,imm8
 
             // SUB A, r8
-            0x90 => self.sub(self.reg.b), // SUB B
-            0x91 => self.sub(self.reg.c), // SUB C
-            0x92 => self.sub(self.reg.d), // SUB D
-            0x93 => self.sub(self.reg.e), // SUB E
-            0x94 => self.sub(self.reg.h), // SUB H
-            0x95 => self.sub(self.reg.l), // SUB L
+            0x90 => self.sub(self.reg.b),                       // SUB B
+            0x91 => self.sub(self.reg.c),                       // SUB C
+            0x92 => self.sub(self.reg.d),                       // SUB D
+            0x93 => self.sub(self.reg.e),                       // SUB E
+            0x94 => self.sub(self.reg.h),                       // SUB H
+            0x95 => self.sub(self.reg.l),                       // SUB L
             0x96 => self.sub(mmu.read_byte(self.reg.get_hl())), // SUB (HL)
-            0x97 => self.sub(self.reg.a), // SUB A
+            0x97 => self.sub(self.reg.a),                       // SUB A
 
             // SUB A, imm8
             0xD6 => {
@@ -929,14 +933,14 @@ impl CPU {
             } // SBC A,imm8
 
             // AND A, r8
-            0xA0 => self.and(self.reg.b), // AND B
-            0xA1 => self.and(self.reg.c), // AND C
-            0xA2 => self.and(self.reg.d), // AND D
-            0xA3 => self.and(self.reg.e), // AND E
-            0xA4 => self.and(self.reg.h), // AND H
-            0xA5 => self.and(self.reg.l), // AND L
+            0xA0 => self.and(self.reg.b),                       // AND B
+            0xA1 => self.and(self.reg.c),                       // AND C
+            0xA2 => self.and(self.reg.d),                       // AND D
+            0xA3 => self.and(self.reg.e),                       // AND E
+            0xA4 => self.and(self.reg.h),                       // AND H
+            0xA5 => self.and(self.reg.l),                       // AND L
             0xA6 => self.and(mmu.read_byte(self.reg.get_hl())), // AND (HL)
-            0xA7 => self.and(self.reg.a), // AND A
+            0xA7 => self.and(self.reg.a),                       // AND A
 
             // AND A, imm8
             0xE6 => {
@@ -945,14 +949,14 @@ impl CPU {
             } // AND A,imm8
 
             // XOR A, r8
-            0xA8 => self.xor(self.reg.b), // XOR B
-            0xA9 => self.xor(self.reg.c), // XOR C
-            0xAA => self.xor(self.reg.d), // XOR D
-            0xAB => self.xor(self.reg.e), // XOR E
-            0xAC => self.xor(self.reg.h), // XOR H
-            0xAD => self.xor(self.reg.l), // XOR L
+            0xA8 => self.xor(self.reg.b),                       // XOR B
+            0xA9 => self.xor(self.reg.c),                       // XOR C
+            0xAA => self.xor(self.reg.d),                       // XOR D
+            0xAB => self.xor(self.reg.e),                       // XOR E
+            0xAC => self.xor(self.reg.h),                       // XOR H
+            0xAD => self.xor(self.reg.l),                       // XOR L
             0xAE => self.xor(mmu.read_byte(self.reg.get_hl())), // XOR (HL)
-            0xAF => self.xor(self.reg.a), // XOR A
+            0xAF => self.xor(self.reg.a),                       // XOR A
 
             // XOR A, imm8
             0xEE => {
@@ -961,14 +965,14 @@ impl CPU {
             } // XOR A,imm8
 
             // OR A, r8
-            0xB0 => self.or(self.reg.b), // OR B
-            0xB1 => self.or(self.reg.c), // OR C
-            0xB2 => self.or(self.reg.d), // OR D
-            0xB3 => self.or(self.reg.e), // OR E
-            0xB4 => self.or(self.reg.h), // OR H
-            0xB5 => self.or(self.reg.l), // OR L
+            0xB0 => self.or(self.reg.b),                       // OR B
+            0xB1 => self.or(self.reg.c),                       // OR C
+            0xB2 => self.or(self.reg.d),                       // OR D
+            0xB3 => self.or(self.reg.e),                       // OR E
+            0xB4 => self.or(self.reg.h),                       // OR H
+            0xB5 => self.or(self.reg.l),                       // OR L
             0xB6 => self.or(mmu.read_byte(self.reg.get_hl())), // OR (HL)
-            0xB7 => self.or(self.reg.a), // OR A
+            0xB7 => self.or(self.reg.a),                       // OR A
 
             // OR A, imm8
             0xF6 => {
@@ -977,14 +981,14 @@ impl CPU {
             } // OR A,imm8
 
             // CP A, r8
-            0xB8 => self.cp(self.reg.b), // CP B
-            0xB9 => self.cp(self.reg.c), // CP C
-            0xBA => self.cp(self.reg.d), // CP D
-            0xBB => self.cp(self.reg.e), // CP E
-            0xBC => self.cp(self.reg.h), // CP H
-            0xBD => self.cp(self.reg.l), // CP L
+            0xB8 => self.cp(self.reg.b),                       // CP B
+            0xB9 => self.cp(self.reg.c),                       // CP C
+            0xBA => self.cp(self.reg.d),                       // CP D
+            0xBB => self.cp(self.reg.e),                       // CP E
+            0xBC => self.cp(self.reg.h),                       // CP H
+            0xBD => self.cp(self.reg.l),                       // CP L
             0xBE => self.cp(mmu.read_byte(self.reg.get_hl())), // CP (HL)
-            0xBF => self.cp(self.reg.a), // CP A
+            0xBF => self.cp(self.reg.a),                       // CP A
 
             // CP A, imm8
             0xFE => {
@@ -1168,8 +1172,10 @@ impl CPU {
                 self.reg.set_flag(ZERO, false);
                 self.reg.set_flag(SUBTRACT, false);
 
-                self.reg.set_flag(HALF_CARRY, (sp & 0x000F) + (n & 0x000F) > 0x000F);
-                self.reg.set_flag(CARRY, (sp & 0x00FF) + (n & 0x00FF) > 0x00FF);
+                self.reg
+                    .set_flag(HALF_CARRY, (sp & 0x000F) + (n & 0x000F) > 0x000F);
+                self.reg
+                    .set_flag(CARRY, (sp & 0x00FF) + (n & 0x00FF) > 0x00FF);
 
                 self.reg.set_hl(result);
             } // LD HL,SP+imm8

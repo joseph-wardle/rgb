@@ -13,7 +13,6 @@ pub struct MMU {
     joypad: Joypad,                // Joypad input
     pub serial: Serial,            // Serial communication
     timer: Timer,                  // Timer
-    
 
     // | 7  6  5 |   4    |   3    |   2   |  1  |   0    |
     // | ------- | ------ | ------ | ----- | --- | ------ |
@@ -57,7 +56,7 @@ impl MMU {
     pub fn step(&mut self, cycles: u16) {
         self.timer.step(cycles, &mut self.interrupt_flag);
     }
-    
+
     fn get_memory_region(&self, address: u16) -> MemoryRegion {
         match address {
             0x0000..=0x7FFF => MemoryRegion::Cartridge,

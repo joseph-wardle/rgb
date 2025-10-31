@@ -16,5 +16,4 @@ pub trait Memory {
     }
 }
 
-
-pub trait MemoryBus : Memory {}
+pub trait MemoryBus: Memory {}

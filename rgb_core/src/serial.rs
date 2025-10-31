@@ -39,7 +39,11 @@ impl Serial {
 
 impl Serial {
     pub fn new() -> Self {
-        Serial { sb: 0, sc: 0, buffer: Vec::new() }
+        Serial {
+            sb: 0,
+            sc: 0,
+            buffer: Vec::new(),
+        }
     }
 
     pub fn write_control(&mut self, value: u8) {
@@ -49,6 +53,4 @@ impl Serial {
             self.sc &= 0x7F; // transfer complete
         }
     }
-    
-    
 }
