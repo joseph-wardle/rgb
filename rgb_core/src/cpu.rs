@@ -844,17 +844,17 @@ impl CPU {
             0x10 => self.reg.pc += 1, // STOP
 
             // LD r8, r8
-            0x40 => {}, // LD B,B (no op)
-            0x41 => self.reg.b = self.reg.c, // LD B,C
-            0x42 => self.reg.b = self.reg.d, // LD B,D
-            0x43 => self.reg.b = self.reg.e, // LD B,E
-            0x44 => self.reg.b = self.reg.h, // LD B,H
-            0x45 => self.reg.b = self.reg.l, // LD B,L
+            0x40 => {}                                             // LD B,B (no op)
+            0x41 => self.reg.b = self.reg.c,                       // LD B,C
+            0x42 => self.reg.b = self.reg.d,                       // LD B,D
+            0x43 => self.reg.b = self.reg.e,                       // LD B,E
+            0x44 => self.reg.b = self.reg.h,                       // LD B,H
+            0x45 => self.reg.b = self.reg.l,                       // LD B,L
             0x46 => self.reg.b = mmu.read_byte(self.reg.get_hl()), // LD B,(HL)
-            0x47 => self.reg.b = self.reg.a, // LD B,A
+            0x47 => self.reg.b = self.reg.a,                       // LD B,A
 
             0x48 => self.reg.c = self.reg.b, // LD C,B
-            0x49 => {},                      // LD C,C (no op)
+            0x49 => {}                       // LD C,C (no op)
             0x4A => self.reg.c = self.reg.d, // LD C,D
             0x4B => self.reg.c = self.reg.e, // LD C,E
             0x4C => self.reg.c = self.reg.h, // LD C,H
@@ -864,7 +864,7 @@ impl CPU {
 
             0x50 => self.reg.d = self.reg.b, // LD D,B
             0x51 => self.reg.d = self.reg.c, // LD D,C
-            0x52 => {},                      // LD D,D (no op)
+            0x52 => {}                       // LD D,D (no op)
             0x53 => self.reg.d = self.reg.e, // LD D,E
             0x54 => self.reg.d = self.reg.h, // LD D,H
             0x55 => self.reg.d = self.reg.l, // LD D,L
@@ -874,7 +874,7 @@ impl CPU {
             0x58 => self.reg.e = self.reg.b, // LD E,B
             0x59 => self.reg.e = self.reg.c, // LD E,C
             0x5A => self.reg.e = self.reg.d, // LD E,D
-            0x5B => {},                      // LD E,E (no op)
+            0x5B => {}                       // LD E,E (no op)
             0x5C => self.reg.e = self.reg.h, // LD E,H
             0x5D => self.reg.e = self.reg.l, // LD E,L
             0x5E => self.reg.e = mmu.read_byte(self.reg.get_hl()), // LD E,(HL)
@@ -884,7 +884,7 @@ impl CPU {
             0x61 => self.reg.h = self.reg.c, // LD H,C
             0x62 => self.reg.h = self.reg.d, // LD H,D
             0x63 => self.reg.h = self.reg.e, // LD H,E
-            0x64 => {},                      // LD H,H (no op)
+            0x64 => {}                       // LD H,H (no op)
             0x65 => self.reg.h = self.reg.l, // LD H,L
             0x66 => self.reg.h = mmu.read_byte(self.reg.get_hl()), // LD H,(HL)
             0x67 => self.reg.h = self.reg.a, // LD H,A
@@ -894,7 +894,7 @@ impl CPU {
             0x6A => self.reg.l = self.reg.d, // LD L,D
             0x6B => self.reg.l = self.reg.e, // LD L,E
             0x6C => self.reg.l = self.reg.h, // LD L,H
-            0x6D => {},                      // LD L,L (no op)
+            0x6D => {}                       // LD L,L (no op)
             0x6E => self.reg.l = mmu.read_byte(self.reg.get_hl()), // LD L,(HL)
             0x6F => self.reg.l = self.reg.a, // LD L,A
 
