@@ -27,7 +27,7 @@ impl Clock {
 }
 
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
-enum HaltState {
+pub(crate) enum HaltState {
     #[default]
     Running,
     Halted,
@@ -64,9 +64,9 @@ impl CycleResult {
 pub struct CPU {
     pub reg: Registers,
     clock: Clock,
-    halt_state: HaltState,
-    ime: bool,
-    ime_scheduled: Option<u8>,
+    pub(crate) halt_state: HaltState,
+    pub(crate) ime: bool,
+    pub(crate) ime_scheduled: Option<u8>,
 }
 
 impl Default for CPU {
@@ -637,9 +637,16 @@ impl CPU {
             return cycles;
         }
 
+        let pc_before = self.reg.pc;
         let opcode = self.fetch_byte(mmu);
+
+        self.log_inst_start(pc_before, opcode);
+
         let cycles = self.execute_opcode(opcode, mmu);
         let total = cycles.total();
+
+        self.log_inst_done(opcode, total, cycles.took_conditional);
+
         self.clock.record(total);
         self.advance_ime_schedule();
         total
@@ -929,7 +936,10 @@ impl CPU {
             0x7F => { /* LD A,A – no effect */ } // LD A,A
 
             // HALT
-            0x76 => self.halt_state = HaltState::Halted, // HALT
+            0x76 => {
+                self.halt_state = HaltState::Halted;
+                self.log_halt_enter();
+            } // HALT
 
             // ADD A, r8
             0x80 => self.add(self.reg.b), // ADD A,B
@@ -1674,6 +1684,7 @@ impl CPU {
 
             _ => {
                 // Undocumented opcodes act as NOPs on the DMG.
+                self.log_undocumented(opcode);
             }
         }
     }
@@ -1685,6 +1696,7 @@ impl CPU {
 
         if self.interrupts_pending(mmu) {
             self.halt_state = HaltState::Running;
+            self.log_halt_wake();
             None
         } else {
             Some(4)
@@ -1706,6 +1718,7 @@ impl CPU {
             if remaining == 0 {
                 self.ime = true;
                 self.ime_scheduled = None;
+                self.log_ime_enabled();
             } else {
                 self.ime_scheduled = Some(remaining - 1);
             }
@@ -1737,7 +1750,7 @@ impl CPU {
                 iflag &= !mask;
                 mmu.write_byte(0xFF0F, iflag);
                 self.push(mmu, self.reg.pc);
-                self.reg.pc = match i {
+                let vector = match i {
                     0 => 0x40,
                     1 => 0x48,
                     2 => 0x50,
@@ -1745,6 +1758,8 @@ impl CPU {
                     4 => 0x60,
                     _ => 0x00,
                 };
+                self.reg.pc = vector;
+                self.log_interrupt_service(vector, i);
                 return Some(20);
             }
         }

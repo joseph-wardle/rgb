@@ -9,3 +9,4 @@ pub mod ppu;
 pub mod registers;
 pub mod serial;
 pub mod timer;
+pub mod trace;
