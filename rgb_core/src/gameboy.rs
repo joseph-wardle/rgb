@@ -18,25 +18,30 @@ pub struct DMG {
 
 impl DMG {
     pub fn new(cartridge: Box<dyn Cartridge>) -> Self {
-        Self {
+        let dmg = Self {
             cpu: CPU::new(),
             ppu: PPU::new(),
             apu: APU::new(),
             bus: MMU::new(cartridge),
-        }
+        };
+        dmg.log_power_on("cold");
+        dmg
     }
 
     pub fn new_post_bios(cartridge: Box<dyn Cartridge>) -> Self {
-        Self {
+        let dmg = Self {
             cpu: CPU::new_post_bios(),
             ppu: PPU::new(),
             apu: APU::new(),
             bus: MMU::new(cartridge),
-        }
+        };
+        dmg.log_power_on("post_bios");
+        dmg
     }
 
     pub fn step_frame(&mut self) {
         const CYCLES_PER_FRAME: u32 = 70_224;
+        self.log_frame_start(CYCLES_PER_FRAME);
         let mut consumed: u32 = 0;
 
         while consumed < CYCLES_PER_FRAME {
@@ -51,17 +56,29 @@ impl DMG {
                 self.bus.step(extra.into());
             }
         }
+        self.log_frame_done(consumed);
     }
 
     pub fn run_until<F>(&mut self, mut condition: F, max_steps: usize)
     where
         F: FnMut(&Serial) -> bool,
     {
-        for _ in 0..max_steps {
+        self.log_run_until_start(max_steps);
+        let mut steps_executed: usize = 0;
+        let mut condition_met = false;
+
+        for step in 0..max_steps {
             self.step_frame();
-            if condition(self.bus.serial()) {
+            steps_executed = step + 1;
+            if condition(self.serial()) {
+                condition_met = true;
+                self.log_run_until_condition_met(step, steps_executed);
                 break;
             }
+        }
+
+        if !condition_met {
+            self.log_run_until_exhausted(steps_executed, max_steps);
         }
     }
 

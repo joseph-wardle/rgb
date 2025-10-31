@@ -36,6 +36,10 @@ impl Serial {
     pub fn output_string(&self) -> String {
         String::from_utf8_lossy(&self.buffer).to_string()
     }
+
+    pub fn len(&self) -> usize {
+        self.buffer.len()
+    }
 }
 
 impl Serial {

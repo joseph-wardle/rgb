@@ -1,4 +1,5 @@
 use crate::cpu::CPU;
+use crate::gameboy::DMG;
 
 #[cfg(feature = "trace")]
 use crate::registers::Flag::{CARRY, HALF_CARRY, SUBTRACT, ZERO};
@@ -132,4 +133,121 @@ impl CPU {
     #[inline(always)]
     #[cfg(not(feature = "trace"))]
     pub(crate) fn log_ime_enabled(&self) {}
+}
+
+impl DMG {
+    #[inline(always)]
+    #[cfg(feature = "trace")]
+    pub(crate) fn log_power_on(&self, kind: &'static str) {
+        let cpu = self.cpu();
+        let regs = cpu.registers();
+        debug!(
+            target: "gb::dmg",
+            boot = kind,
+            pc = %hex16!(regs.pc),
+            ime = cpu.ime,
+            halt = ?cpu.halt_state,
+            "boot"
+        );
+    }
+
+    #[inline(always)]
+    #[cfg(not(feature = "trace"))]
+    pub(crate) fn log_power_on(&self, _kind: &'static str) {}
+
+    #[inline(always)]
+    #[cfg(feature = "trace")]
+    pub(crate) fn log_frame_start(&self, target_cycles: u32) {
+        let cpu = self.cpu();
+        let regs = cpu.registers();
+        trace!(
+            target: "gb::dmg",
+            pc = %hex16!(regs.pc),
+            target_cycles = target_cycles,
+            ime = cpu.ime,
+            halt = ?cpu.halt_state,
+            "frame.start"
+        );
+    }
+
+    #[inline(always)]
+    #[cfg(not(feature = "trace"))]
+    pub(crate) fn log_frame_start(&self, _target_cycles: u32) {}
+
+    #[inline(always)]
+    #[cfg(feature = "trace")]
+    pub(crate) fn log_frame_done(&self, consumed_cycles: u32) {
+        let cpu = self.cpu();
+        let regs = cpu.registers();
+        trace!(
+            target: "gb::dmg",
+            pc = %hex16!(regs.pc),
+            cycles = consumed_cycles,
+            ime = cpu.ime,
+            halt = ?cpu.halt_state,
+            "frame.complete"
+        );
+    }
+
+    #[inline(always)]
+    #[cfg(not(feature = "trace"))]
+    pub(crate) fn log_frame_done(&self, _consumed_cycles: u32) {}
+
+    #[inline(always)]
+    #[cfg(feature = "trace")]
+    pub(crate) fn log_run_until_start(&self, max_steps: usize) {
+        let cpu = self.cpu();
+        let regs = cpu.registers();
+        let serial = self.serial();
+        trace!(
+            target: "gb::dmg",
+            pc = %hex16!(regs.pc),
+            max_steps = max_steps,
+            serial_len = serial.len(),
+            ime = cpu.ime,
+            halt = ?cpu.halt_state,
+            "run_until.start"
+        );
+    }
+
+    #[inline(always)]
+    #[cfg(not(feature = "trace"))]
+    pub(crate) fn log_run_until_start(&self, _max_steps: usize) {}
+
+    #[inline(always)]
+    #[cfg(feature = "trace")]
+    pub(crate) fn log_run_until_condition_met(&self, step_index: usize, steps_executed: usize) {
+        let cpu = self.cpu();
+        let regs = cpu.registers();
+        let serial = self.serial();
+        debug!(
+            target: "gb::dmg",
+            pc = %hex16!(regs.pc),
+            step_index = step_index,
+            steps_executed = steps_executed,
+            serial_len = serial.len(),
+            "run_until.condition_met"
+        );
+    }
+
+    #[inline(always)]
+    #[cfg(not(feature = "trace"))]
+    pub(crate) fn log_run_until_condition_met(&self, _step_index: usize, _steps_executed: usize) {}
+
+    #[inline(always)]
+    #[cfg(feature = "trace")]
+    pub(crate) fn log_run_until_exhausted(&self, steps_executed: usize, max_steps: usize) {
+        let serial = self.serial();
+        warn!(
+            target: "gb::dmg",
+            steps_executed = steps_executed,
+            max_steps = max_steps,
+            serial_len = serial.len(),
+            "run_until.max_steps_exhausted"
+        );
+    }
+
+    #[inline(always)]
+    #[cfg(not(feature = "trace"))]
+    pub(crate) fn log_run_until_exhausted(&self, _steps_executed: usize, _max_steps: usize) {}
 }
