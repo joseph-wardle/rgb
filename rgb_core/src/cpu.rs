@@ -1,3 +1,11 @@
+//! CPU execution engine for the DMG Game Boy (see Pan Docs for reference).
+//!
+//! The design here deliberately favours readability and small, well-named helpers
+//! so the control flow can be studied without mental gymnastics.
+
+mod opcode;
+
+use self::opcode::{CycleCost, cb_cycle_cost, cycle_cost};
 use std::fs::OpenOptions;
 use std::io::Write;
 
@@ -5,10 +13,67 @@ use crate::memory::MemoryBus;
 use crate::registers::Flag::{CARRY, HALF_CARRY, SUBTRACT, ZERO};
 use crate::registers::Registers;
 
+#[derive(Default)]
+struct Clock {
+    last_instruction: u8,
+}
+
+impl Clock {
+    fn record(&mut self, cycles: u8) {
+        self.last_instruction = cycles;
+    }
+
+    fn last(&self) -> u8 {
+        self.last_instruction
+    }
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+enum HaltState {
+    Running,
+    Halted,
+}
+
+impl Default for HaltState {
+    fn default() -> Self {
+        HaltState::Running
+    }
+}
+
+#[derive(Copy, Clone, Debug)]
+struct CycleResult {
+    cost: CycleCost,
+    took_conditional: bool,
+}
+
+impl CycleResult {
+    fn new(cost: CycleCost) -> Self {
+        Self {
+            cost,
+            took_conditional: false,
+        }
+    }
+
+    fn set_cost(&mut self, cost: CycleCost) {
+        self.cost = cost;
+        self.took_conditional = false;
+    }
+
+    fn take_conditional(&mut self) {
+        self.took_conditional = true;
+    }
+
+    fn total(self) -> u8 {
+        self.cost.total(self.took_conditional)
+    }
+}
+
 pub struct CPU {
     pub reg: Registers,
-    halted: bool,
-    ei: bool,
+    clock: Clock,
+    halt_state: HaltState,
+    ime: bool,
+    ime_scheduled: Option<u8>,
 }
 
 impl CPU {
@@ -587,33 +652,54 @@ impl CPU {
     pub fn new() -> Self {
         Self {
             reg: Registers::new(),
-            halted: false,
-            ei: false,
+            clock: Clock::default(),
+            halt_state: HaltState::Running,
+            ime: false,
+            ime_scheduled: None,
         }
     }
 
     pub fn new_post_bios() -> Self {
         Self {
             reg: Registers::new_post_bios(),
-            halted: false,
-            ei: false,
+            clock: Clock::default(),
+            halt_state: HaltState::Running,
+            ime: false,
+            ime_scheduled: None,
         }
     }
 
-    pub fn step(&mut self, mmu: &mut impl MemoryBus) {
-        if self.halted {
-            let pending = mmu.read_byte(0xFFFF) & mmu.read_byte(0xFF0F);
-            if pending == 0 {
-                return;
-            } else {
-                self.halted = false;
-            }
+    pub fn step(&mut self, mmu: &mut impl MemoryBus) -> u8 {
+        if let Some(cycles) = self.step_halt_state(mmu) {
+            self.clock.record(cycles);
+            self.advance_ime_schedule();
+            return cycles;
         }
 
-        // let pc_before = self.reg.pc;
-        // self.log_state(mmu, pc_before);
-
         let opcode = self.fetch_byte(mmu);
+        let cycles = self.execute_opcode(opcode, mmu);
+        let total = cycles.total();
+        self.clock.record(total);
+        self.advance_ime_schedule();
+        total
+    }
+
+    pub fn last_cycles(&self) -> u8 {
+        self.clock.last()
+    }
+
+    fn execute_opcode(&mut self, opcode: u8, mmu: &mut impl MemoryBus) -> CycleResult {
+        let mut cycles = CycleResult::new(cycle_cost(opcode));
+        self.execute_main_opcode(opcode, mmu, &mut cycles);
+        cycles
+    }
+
+    fn execute_main_opcode(
+        &mut self,
+        opcode: u8,
+        mmu: &mut impl MemoryBus,
+        cycles: &mut CycleResult,
+    ) {
         match opcode {
             // NOP
             0x00 => {} // NOP
@@ -756,25 +842,29 @@ impl CPU {
             0x20 => {
                 let imm8 = self.fetch_byte(mmu);
                 if !self.reg.get_flag(ZERO) {
-                    self.jr(imm8)
+                    self.jr(imm8);
+                    cycles.take_conditional();
                 }
             } // JR NZ,imm8
             0x28 => {
                 let imm8 = self.fetch_byte(mmu);
                 if self.reg.get_flag(ZERO) {
-                    self.jr(imm8)
+                    self.jr(imm8);
+                    cycles.take_conditional();
                 }
             } // JR Z,imm8
             0x30 => {
                 let imm8 = self.fetch_byte(mmu);
                 if !self.reg.get_flag(CARRY) {
-                    self.jr(imm8)
+                    self.jr(imm8);
+                    cycles.take_conditional();
                 }
             } // JR NC,imm8
             0x38 => {
                 let imm8 = self.fetch_byte(mmu);
                 if self.reg.get_flag(CARRY) {
-                    self.jr(imm8)
+                    self.jr(imm8);
+                    cycles.take_conditional();
                 }
             } // JR C,imm8
 
@@ -782,6 +872,10 @@ impl CPU {
             0x10 => self.reg.pc += 1, // STOP
 
             // LD r8, r8
+            #[expect(
+                clippy::self_assignment,
+                reason = "LD B,B is a defined opcode; no state change"
+            )]
             0x40 => self.reg.b = self.reg.b, // LD B,B
             0x41 => self.reg.b = self.reg.c, // LD B,C
             0x42 => self.reg.b = self.reg.d, // LD B,D
@@ -792,6 +886,10 @@ impl CPU {
             0x47 => self.reg.b = self.reg.a, // LD B,A
 
             0x48 => self.reg.c = self.reg.b, // LD C,B
+            #[expect(
+                clippy::self_assignment,
+                reason = "LD C,C is a defined opcode; no state change"
+            )]
             0x49 => self.reg.c = self.reg.c, // LD C,C
             0x4A => self.reg.c = self.reg.d, // LD C,D
             0x4B => self.reg.c = self.reg.e, // LD C,E
@@ -802,6 +900,10 @@ impl CPU {
 
             0x50 => self.reg.d = self.reg.b, // LD D,B
             0x51 => self.reg.d = self.reg.c, // LD D,C
+            #[expect(
+                clippy::self_assignment,
+                reason = "LD D,D is a defined opcode; no state change"
+            )]
             0x52 => self.reg.d = self.reg.d, // LD D,D
             0x53 => self.reg.d = self.reg.e, // LD D,E
             0x54 => self.reg.d = self.reg.h, // LD D,H
@@ -812,6 +914,10 @@ impl CPU {
             0x58 => self.reg.e = self.reg.b, // LD E,B
             0x59 => self.reg.e = self.reg.c, // LD E,C
             0x5A => self.reg.e = self.reg.d, // LD E,D
+            #[expect(
+                clippy::self_assignment,
+                reason = "LD E,E is a defined opcode; no state change"
+            )]
             0x5B => self.reg.e = self.reg.e, // LD E,E
             0x5C => self.reg.e = self.reg.h, // LD E,H
             0x5D => self.reg.e = self.reg.l, // LD E,L
@@ -822,6 +928,10 @@ impl CPU {
             0x61 => self.reg.h = self.reg.c, // LD H,C
             0x62 => self.reg.h = self.reg.d, // LD H,D
             0x63 => self.reg.h = self.reg.e, // LD H,E
+            #[expect(
+                clippy::self_assignment,
+                reason = "LD H,H is a defined opcode; no state change"
+            )]
             0x64 => self.reg.h = self.reg.h, // LD H,H
             0x65 => self.reg.h = self.reg.l, // LD H,L
             0x66 => self.reg.h = mmu.read_byte(self.reg.get_hl()), // LD H,(HL)
@@ -832,6 +942,10 @@ impl CPU {
             0x6A => self.reg.l = self.reg.d, // LD L,D
             0x6B => self.reg.l = self.reg.e, // LD L,E
             0x6C => self.reg.l = self.reg.h, // LD L,H
+            #[expect(
+                clippy::self_assignment,
+                reason = "LD L,L is a defined opcode; no state change"
+            )]
             0x6D => self.reg.l = self.reg.l, // LD L,L
             0x6E => self.reg.l = mmu.read_byte(self.reg.get_hl()), // LD L,(HL)
             0x6F => self.reg.l = self.reg.a, // LD L,A
@@ -854,7 +968,7 @@ impl CPU {
             0x7F => { /* LD A,A – no effect */ } // LD A,A
 
             // HALT
-            0x76 => self.halted = true, // HALT
+            0x76 => self.halt_state = HaltState::Halted, // HALT
 
             // ADD A, r8
             0x80 => self.add(self.reg.b), // ADD A,B
@@ -988,21 +1102,25 @@ impl CPU {
             0xC0 => {
                 if !self.reg.get_flag(ZERO) {
                     self.reg.pc = self.pop(mmu);
+                    cycles.take_conditional();
                 }
             } // RET NZ
             0xC8 => {
                 if self.reg.get_flag(ZERO) {
                     self.reg.pc = self.pop(mmu);
+                    cycles.take_conditional();
                 }
             } // RET Z
             0xD0 => {
                 if !self.reg.get_flag(CARRY) {
                     self.reg.pc = self.pop(mmu);
+                    cycles.take_conditional();
                 }
             } // RET NC
             0xD8 => {
                 if self.reg.get_flag(CARRY) {
                     self.reg.pc = self.pop(mmu);
+                    cycles.take_conditional();
                 }
             } // RET C
 
@@ -1012,7 +1130,8 @@ impl CPU {
             // RETI
             0xD9 => {
                 self.reg.pc = self.pop(mmu);
-                self.ei = true;
+                self.ime = true;
+                self.ime_scheduled = None;
             } // RETI
 
             // JP cond, imm16
@@ -1020,24 +1139,28 @@ impl CPU {
                 let imm16 = self.fetch_word(mmu);
                 if !self.reg.get_flag(ZERO) {
                     self.reg.pc = imm16;
+                    cycles.take_conditional();
                 }
             } // JP NZ,imm16
             0xCA => {
                 let imm16 = self.fetch_word(mmu);
                 if self.reg.get_flag(ZERO) {
                     self.reg.pc = imm16;
+                    cycles.take_conditional();
                 }
             } // JP Z,imm16
             0xD2 => {
                 let imm16 = self.fetch_word(mmu);
                 if !self.reg.get_flag(CARRY) {
                     self.reg.pc = imm16;
+                    cycles.take_conditional();
                 }
             } // JP NC,imm16
             0xDA => {
                 let imm16 = self.fetch_word(mmu);
                 if self.reg.get_flag(CARRY) {
                     self.reg.pc = imm16;
+                    cycles.take_conditional();
                 }
             } // JP C,imm16
 
@@ -1052,24 +1175,28 @@ impl CPU {
                 let imm16 = self.fetch_word(mmu);
                 if !self.reg.get_flag(ZERO) {
                     self.call(mmu, imm16);
+                    cycles.take_conditional();
                 }
             } // CALL NZ,imm16
             0xCC => {
                 let imm16 = self.fetch_word(mmu);
                 if self.reg.get_flag(ZERO) {
                     self.call(mmu, imm16);
+                    cycles.take_conditional();
                 }
             } // CALL Z,imm16
             0xD4 => {
                 let imm16 = self.fetch_word(mmu);
                 if !self.reg.get_flag(CARRY) {
                     self.call(mmu, imm16);
+                    cycles.take_conditional();
                 }
             } // CALL NC,imm16
             0xDC => {
                 let imm16 = self.fetch_word(mmu);
                 if self.reg.get_flag(CARRY) {
                     self.call(mmu, imm16);
+                    cycles.take_conditional();
                 }
             } // CALL C,imm16
 
@@ -1172,14 +1299,20 @@ impl CPU {
             0xF9 => self.reg.sp = self.reg.get_hl(), // LD SP,HL
 
             // DI
-            0xF3 => self.ei = false, // DI
+            0xF3 => {
+                self.ime = false;
+                self.ime_scheduled = None;
+            } // DI
 
             // EI
-            0xFB => self.ei = true, // EI
+            0xFB => {
+                self.ime_scheduled = Some(1);
+            } // EI
 
             // CB PREFIX
             0xCB => {
                 let opcode = self.fetch_byte(mmu);
+                cycles.set_cost(cb_cycle_cost(opcode));
                 match opcode {
                     // RLC r8
                     0x00 => self.reg.b = self.rlc(self.reg.b), // RLC B
@@ -1578,24 +1711,64 @@ impl CPU {
                 }
             }
 
-            _ => panic!("Unknown opcode: 0x{:02X}", opcode),
+            _ => {
+                // Undocumented opcodes act as NOPs on the DMG.
+            }
         }
     }
 
-    pub fn service_interrupts(&mut self, mmu: &mut impl MemoryBus) {
-        if !self.ei {
-            return;
+    fn step_halt_state(&mut self, mmu: &mut impl MemoryBus) -> Option<u8> {
+        if self.halt_state == HaltState::Running {
+            return None;
         }
 
+        if self.interrupts_pending(mmu) {
+            self.halt_state = HaltState::Running;
+            None
+        } else {
+            Some(4)
+        }
+    }
+
+    fn interrupts_pending(&self, mmu: &mut impl MemoryBus) -> bool {
+        self.pending_interrupt_mask(mmu) != 0
+    }
+
+    fn pending_interrupt_mask(&self, mmu: &mut impl MemoryBus) -> u8 {
+        let ie = mmu.read_byte(0xFFFF);
+        let iflag = mmu.read_byte(0xFF0F);
+        ie & iflag
+    }
+
+    fn advance_ime_schedule(&mut self) {
+        if let Some(remaining) = self.ime_scheduled {
+            if remaining == 0 {
+                self.ime = true;
+                self.ime_scheduled = None;
+            } else {
+                self.ime_scheduled = Some(remaining - 1);
+            }
+        }
+    }
+
+    pub fn service_interrupts(&mut self, mmu: &mut impl MemoryBus) -> Option<u8> {
         let ie = mmu.read_byte(0xFFFF);
         let mut iflag = mmu.read_byte(0xFF0F);
         let pending = ie & iflag;
+
         if pending == 0 {
-            return;
+            return None;
         }
 
-        self.halted = false;
-        self.ei = false;
+        if !self.ime {
+            // A pending interrupt wakes HALT even if IME is disabled.
+            self.halt_state = HaltState::Running;
+            return None;
+        }
+
+        self.halt_state = HaltState::Running;
+        self.ime = false;
+        self.ime_scheduled = None;
 
         for i in 0..5 {
             let mask = 1 << i;
@@ -1611,8 +1784,131 @@ impl CPU {
                     4 => 0x60,
                     _ => 0x00,
                 };
-                break;
+                return Some(20);
             }
         }
+
+        None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::memory::{Memory, MemoryBus};
+    use crate::registers::Flag::ZERO;
+
+    struct MockBus {
+        memory: [u8; 0x10000],
+    }
+
+    impl MockBus {
+        fn new(program: &[u8]) -> Self {
+            let mut memory = [0u8; 0x10000];
+            for (i, byte) in program.iter().enumerate() {
+                memory[i] = *byte;
+            }
+            Self { memory }
+        }
+
+        fn load(&mut self, address: u16, bytes: &[u8]) {
+            for (offset, byte) in bytes.iter().enumerate() {
+                self.memory[address as usize + offset] = *byte;
+            }
+        }
+    }
+
+    impl Memory for MockBus {
+        fn read_byte(&self, address: u16) -> u8 {
+            self.memory[address as usize]
+        }
+
+        fn write_byte(&mut self, address: u16, value: u8) {
+            self.memory[address as usize] = value;
+        }
+    }
+
+    impl MemoryBus for MockBus {}
+
+    #[test]
+    fn jr_nz_cycle_count() {
+        let mut bus = MockBus::new(&[0x20, 0x02]);
+        let mut cpu = CPU::new();
+        cpu.reg.pc = 0x0000;
+        cpu.reg.set_flag(ZERO, false);
+
+        let cycles_taken = cpu.step(&mut bus);
+        assert_eq!(cycles_taken, 12);
+        assert_eq!(cpu.reg.pc, 0x0004);
+
+        let mut bus = MockBus::new(&[0x20, 0x02]);
+        let mut cpu = CPU::new();
+        cpu.reg.pc = 0x0000;
+        cpu.reg.set_flag(ZERO, true);
+
+        let cycles_not_taken = cpu.step(&mut bus);
+        assert_eq!(cycles_not_taken, 8);
+        assert_eq!(cpu.reg.pc, 0x0002);
+    }
+
+    #[test]
+    fn ret_nz_cycle_count() {
+        let mut bus = MockBus::new(&[0xC0]);
+        bus.load(0xFFFC, &[0x34, 0x12]);
+
+        let mut cpu = CPU::new();
+        cpu.reg.pc = 0x0000;
+        cpu.reg.sp = 0xFFFC;
+        cpu.reg.set_flag(ZERO, false);
+
+        let cycles_taken = cpu.step(&mut bus);
+        assert_eq!(cycles_taken, 20);
+        assert_eq!(cpu.reg.pc, 0x1234);
+        assert_eq!(cpu.reg.sp, 0xFFFE);
+
+        let mut bus = MockBus::new(&[0xC0]);
+        let mut cpu = CPU::new();
+        cpu.reg.pc = 0x0000;
+        cpu.reg.set_flag(ZERO, true);
+
+        let cycles_not_taken = cpu.step(&mut bus);
+        assert_eq!(cycles_not_taken, 8);
+        assert_eq!(cpu.reg.pc, 0x0001);
+    }
+
+    #[test]
+    fn cb_prefixed_cycles() {
+        let mut bus = MockBus::new(&[0xCB, 0x11]); // RL C
+        let mut cpu = CPU::new();
+        cpu.reg.pc = 0;
+        let cycles = cpu.step(&mut bus);
+        assert_eq!(cycles, 8);
+
+        let mut bus = MockBus::new(&[0xCB, 0x16]); // RL (HL)
+        bus.load(0xC000, &[0x01]);
+        let mut cpu = CPU::new();
+        cpu.reg.pc = 0;
+        cpu.reg.set_hl(0xC000);
+        let cycles = cpu.step(&mut bus);
+        assert_eq!(cycles, 16);
+    }
+
+    #[test]
+    fn servicing_interrupt_returns_cycles() {
+        let mut bus = MockBus::new(&[]);
+        bus.memory[0xFFFF] = 0x01; // IE
+        bus.memory[0xFF0F] = 0x01; // IF
+
+        let mut cpu = CPU::new();
+        cpu.ime = true;
+        cpu.reg.pc = 0x0100;
+        cpu.reg.sp = 0xFFFE;
+
+        let cycles = cpu.service_interrupts(&mut bus);
+        assert_eq!(cycles, Some(20));
+        assert_eq!(cpu.reg.pc, 0x0040);
+        assert_eq!(cpu.reg.sp, 0xFFFC);
+        assert_eq!(bus.memory[0xFF0F], 0x00);
+        assert!(!cpu.ime);
     }
 }
