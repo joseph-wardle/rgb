@@ -40,6 +40,10 @@ impl Serial {
     pub fn len(&self) -> usize {
         self.buffer.len()
     }
+    
+    pub fn is_empty(&self) -> bool {
+        self.buffer.is_empty()
+    }
 }
 
 impl Serial {
@@ -51,11 +55,30 @@ impl Serial {
         }
     }
 
+    pub(crate) fn write_data(&mut self, value: u8) {
+        self.sb = value;
+        self.log_data_write(value, self.buffer.len());
+    }
+
     pub(crate) fn write_control(&mut self, value: u8) {
+        let previous = self.sc;
+        let raw = value;
         self.sc = value;
-        if self.sc & 0x80 != 0 {
-            self.buffer.push(self.sb);
+        let start_transfer = (raw & 0x80) != 0;
+        let mut transferred = None;
+        if start_transfer {
+            let byte = self.sb;
+            self.buffer.push(byte);
             self.sc &= 0x7F; // transfer complete
+            transferred = Some(byte);
         }
+        self.log_control_write(
+            previous,
+            raw,
+            self.sc,
+            start_transfer,
+            transferred,
+            self.buffer.len(),
+        );
     }
 }

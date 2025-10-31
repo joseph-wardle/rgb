@@ -18,6 +18,7 @@ impl Default for Joypad {
     }
 }
 
+#[derive(Copy, Clone, Debug)]
 #[expect(
     dead_code,
     reason = "Input handling will select buttons once input is wired up"
@@ -45,6 +46,14 @@ impl Joypad {
         Joypad { state: 0xFF }
     }
 
+    pub(crate) fn write_select(&mut self, value: u8) {
+        let previous = self.state;
+        self.state = (self.state & 0x0F) | (value & 0xF0);
+        let buttons_selected = (self.state & Joypad::SELECT_BUTTONS) == 0;
+        let dpad_selected = (self.state & Joypad::SELECT_DPAD) == 0;
+        self.log_select_updated(previous, self.state, value, buttons_selected, dpad_selected);
+    }
+
     fn is_correct_select_pressed(&self, button: Button) -> bool {
         use Button::*;
         match button {
@@ -65,6 +74,8 @@ impl Joypad {
             Button::Right => 0b0000_0010,
         };
 
-        self.is_correct_select_pressed(button) && (self.state & button_mask == 0)
+        let pressed = self.is_correct_select_pressed(button) && (self.state & button_mask == 0);
+        self.log_button_query(button, pressed);
+        pressed
     }
 }

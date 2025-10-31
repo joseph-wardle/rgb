@@ -1,5 +1,8 @@
 use crate::cpu::CPU;
 use crate::gameboy::DMG;
+use crate::input::{Button, Joypad};
+use crate::mmu::MMU;
+use crate::serial::Serial;
 
 #[cfg(feature = "trace")]
 use crate::registers::Flag::{CARRY, HALF_CARRY, SUBTRACT, ZERO};
@@ -250,4 +253,231 @@ impl DMG {
     #[inline(always)]
     #[cfg(not(feature = "trace"))]
     pub(crate) fn log_run_until_exhausted(&self, _steps_executed: usize, _max_steps: usize) {}
+}
+
+impl MMU {
+    #[inline(always)]
+    #[cfg(feature = "trace")]
+    pub(crate) fn log_step(
+        &self,
+        cycles: u16,
+        div: u8,
+        tima: u8,
+        tma: u8,
+        tac: u8,
+        interrupt_flag: u8,
+        interrupt_enable: u8,
+    ) {
+        let timer_enabled = (tac & 0x04) != 0;
+        trace!(
+            target: "gb::mmu",
+            cycles = cycles,
+            div = %hex8!(div),
+            tima = %hex8!(tima),
+            tma = %hex8!(tma),
+            tac = %hex8!(tac),
+            timer_enabled = timer_enabled,
+            interrupt_flag = %hex8!(interrupt_flag),
+            interrupt_enable = %hex8!(interrupt_enable),
+            "step"
+        );
+    }
+
+    #[inline(always)]
+    #[cfg(not(feature = "trace"))]
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn log_step(
+        &self,
+        _cycles: u16,
+        _div: u8,
+        _tima: u8,
+        _tma: u8,
+        _tac: u8,
+        _interrupt_flag: u8,
+        _interrupt_enable: u8,
+    ) {
+    }
+
+    #[inline(always)]
+    #[cfg(feature = "trace")]
+    pub(crate) fn log_io_read(&self, address: u16, value: u8) {
+        if let Some(name) = Self::io_register_label(address) {
+            trace!(
+                target: "gb::mmu",
+                register = name,
+                address = %hex16!(address),
+                value = %hex8!(value),
+                "io.read"
+            );
+        }
+    }
+
+    #[inline(always)]
+    #[cfg(not(feature = "trace"))]
+    pub(crate) fn log_io_read(&self, _address: u16, _value: u8) {}
+
+    #[inline(always)]
+    #[cfg(feature = "trace")]
+    pub(crate) fn log_io_write(&self, address: u16, value: u8) {
+        if let Some(name) = Self::io_register_label(address) {
+            debug!(
+                target: "gb::mmu",
+                register = name,
+                address = %hex16!(address),
+                value = %hex8!(value),
+                "io.write"
+            );
+        }
+    }
+
+    #[inline(always)]
+    #[cfg(not(feature = "trace"))]
+    pub(crate) fn log_io_write(&self, _address: u16, _value: u8) {}
+
+    #[inline(always)]
+    #[cfg(feature = "trace")]
+    fn io_register_label(address: u16) -> Option<&'static str> {
+        match address {
+            0xFF00 => Some("JOYP"),
+            0xFF01 => Some("SB"),
+            0xFF02 => Some("SC"),
+            0xFF04 => Some("DIV"),
+            0xFF05 => Some("TIMA"),
+            0xFF06 => Some("TMA"),
+            0xFF07 => Some("TAC"),
+            0xFF0F => Some("IF"),
+            0xFFFF => Some("IE"),
+            _ => None,
+        }
+    }
+}
+
+impl Serial {
+    #[inline(always)]
+    #[cfg(feature = "trace")]
+    pub(crate) fn log_data_write(&self, value: u8, buffer_len: usize) {
+        trace!(
+            target: "gb::serial",
+            value = %hex8!(value),
+            buffer_len = buffer_len,
+            "sb.write"
+        );
+    }
+
+    #[inline(always)]
+    #[cfg(not(feature = "trace"))]
+    pub(crate) fn log_data_write(&self, _value: u8, _buffer_len: usize) {}
+
+    #[inline(always)]
+    #[cfg(feature = "trace")]
+    pub(crate) fn log_control_write(
+        &self,
+        previous_sc: u8,
+        raw_sc: u8,
+        effective_sc: u8,
+        start_transfer: bool,
+        transferred: Option<u8>,
+        buffer_len: usize,
+    ) {
+        if let Some(byte) = transferred {
+            debug!(
+                target: "gb::serial",
+                prev = %hex8!(previous_sc),
+                control = %hex8!(raw_sc),
+                sc = %hex8!(effective_sc),
+                byte = %hex8!(byte),
+                buffer_len = buffer_len,
+                "transfer"
+            );
+        } else {
+            trace!(
+                target: "gb::serial",
+                prev = %hex8!(previous_sc),
+                control = %hex8!(raw_sc),
+                sc = %hex8!(effective_sc),
+                start_transfer = start_transfer,
+                buffer_len = buffer_len,
+                "control.write"
+            );
+        }
+    }
+
+    #[inline(always)]
+    #[cfg(not(feature = "trace"))]
+    pub(crate) fn log_control_write(
+        &self,
+        _previous_sc: u8,
+        _raw_sc: u8,
+        _effective_sc: u8,
+        _start_transfer: bool,
+        _transferred: Option<u8>,
+        _buffer_len: usize,
+    ) {
+    }
+}
+
+impl Joypad {
+    #[inline(always)]
+    #[cfg(feature = "trace")]
+    pub(crate) fn log_select_updated(
+        &self,
+        previous: u8,
+        current: u8,
+        written: u8,
+        buttons_selected: bool,
+        dpad_selected: bool,
+    ) {
+        trace!(
+            target: "gb::joypad",
+            write = %hex8!(written),
+            previous = %hex8!(previous),
+            state = %hex8!(current),
+            buttons_selected = buttons_selected,
+            dpad_selected = dpad_selected,
+            "select.write"
+        );
+    }
+
+    #[inline(always)]
+    #[cfg(not(feature = "trace"))]
+    pub(crate) fn log_select_updated(
+        &self,
+        _previous: u8,
+        _current: u8,
+        _written: u8,
+        _buttons_selected: bool,
+        _dpad_selected: bool,
+    ) {
+    }
+
+    #[inline(always)]
+    #[cfg(feature = "trace")]
+    pub(crate) fn log_button_query(&self, button: Button, pressed: bool) {
+        trace!(
+            target: "gb::joypad",
+            button = Self::button_name(button),
+            pressed = pressed,
+            state = %hex8!(self.state),
+            "query"
+        );
+    }
+
+    #[inline(always)]
+    #[cfg(not(feature = "trace"))]
+    pub(crate) fn log_button_query(&self, _button: Button, _pressed: bool) {}
+
+    #[inline(always)]
+    #[cfg(feature = "trace")]
+    fn button_name(button: Button) -> &'static str {
+        match button {
+            Button::Start => "Start",
+            Button::Select => "Select",
+            Button::B => "B",
+            Button::A => "A",
+            Button::Down => "Down",
+            Button::Up => "Up",
+            Button::Left => "Left",
+            Button::Right => "Right",
+        }
+    }
 }
