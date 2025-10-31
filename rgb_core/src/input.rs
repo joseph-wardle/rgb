@@ -12,6 +12,12 @@ pub struct Joypad {
     pub state: u8,
 }
 
+impl Default for Joypad {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 pub enum Button {
     Start,
     Select,

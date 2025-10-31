@@ -17,6 +17,12 @@ pub struct PPU {
     window_x: u8,       // Window X Position
 }
 
+impl Default for PPU {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl PPU {
     pub fn new() -> Self {
         PPU {

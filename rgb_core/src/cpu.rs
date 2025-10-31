@@ -28,16 +28,11 @@ impl Clock {
     }
 }
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
 enum HaltState {
+    #[default]
     Running,
     Halted,
-}
-
-impl Default for HaltState {
-    fn default() -> Self {
-        HaltState::Running
-    }
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -74,6 +69,12 @@ pub struct CPU {
     halt_state: HaltState,
     ime: bool,
     ime_scheduled: Option<u8>,
+}
+
+impl Default for CPU {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl CPU {

@@ -25,6 +25,7 @@ pub struct MMU {
     wram_bank: u8,      // Work RAM bank selector
 }
 
+#[expect(clippy::upper_case_acronyms)]
 enum MemoryRegion {
     Cartridge,
     PPU,
@@ -73,7 +74,7 @@ impl MMU {
 
     fn read_wram(&self, address: u16) -> u8 {
         match address {
-            0xC000..=0xcFFF => self.wram[address as usize - 0xC000],
+            0xC000..=0xCFFF => self.wram[address as usize - 0xC000],
             0xD000..=0xDFFF => {
                 self.wram[address as usize - 0xD000 + 0x1000 * self.wram_bank as usize]
             }
@@ -87,7 +88,7 @@ impl MMU {
 
     fn write_wram(&mut self, address: u16, value: u8) {
         match address {
-            0xC000..=0xcFFF => self.wram[address as usize - 0xC000] = value,
+            0xC000..=0xCFFF => self.wram[address as usize - 0xC000] = value,
             0xD000..=0xDFFF => {
                 self.wram[address as usize - 0xD000 + 0x1000 * self.wram_bank as usize] = value
             }

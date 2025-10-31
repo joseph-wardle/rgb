@@ -25,6 +25,7 @@
 // | --- | --------------- | ------------------- | ----------- | ------------ |
 // | SC  | Transfer enable |                     | Clock speed | Clock select |
 
+#[derive(Debug, Default)]
 pub struct Serial {
     pub sb: u8, // Serial transfer data
     pub sc: u8, // Serial transfer control

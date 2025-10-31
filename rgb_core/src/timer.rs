@@ -1,3 +1,4 @@
+#[derive(Debug, Default)]
 pub struct Timer {
     // This register is incremented at a rate of 16384Hz (~16779Hz on SGB). Writing any value to
     // this register resets it to $00. This register is reset when executing the stop instruction,

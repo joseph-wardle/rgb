@@ -1,5 +1,6 @@
 use crate::memory::Memory;
 
+#[derive(Debug, Default)]
 pub struct APU {}
 
 impl APU {
