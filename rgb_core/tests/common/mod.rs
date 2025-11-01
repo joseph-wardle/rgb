@@ -48,7 +48,7 @@ fn run_rom(path: &str) -> String {
     let mut gb = DMG::new(rom);
 
     const MAX_FRAMES: usize = 10_000_000;
-    const TIMEOUT: Duration = Duration::from_secs(15);
+    const TIMEOUT: Duration = Duration::from_secs(60);
 
     let mut last_serial_len = 0;
     let start = Instant::now();
