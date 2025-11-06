@@ -60,17 +60,19 @@ impl Serial {
         self.log_data_write(value, self.buffer.len());
     }
 
-    pub(crate) fn write_control(&mut self, value: u8) {
+    pub(crate) fn write_control(&mut self, value: u8) -> bool {
         let previous = self.sc;
         let raw = value;
         self.sc = value;
         let start_transfer = (raw & 0x80) != 0;
         let mut transferred = None;
+        let mut completed = false;
         if start_transfer {
             let byte = self.sb;
             self.buffer.push(byte);
             self.sc &= 0x7F; // transfer complete
             transferred = Some(byte);
+            completed = true;
         }
         self.log_control_write(
             previous,
@@ -80,5 +82,6 @@ impl Serial {
             transferred,
             self.buffer.len(),
         );
+        completed
     }
 }

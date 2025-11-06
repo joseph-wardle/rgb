@@ -134,7 +134,11 @@ impl MMU {
         match address {
             0xFF00 => self.joypad.write_select(value),
             0xFF01 => self.serial.write_data(value),
-            0xFF02 => self.serial.write_control(value),
+            0xFF02 => {
+                if self.serial.write_control(value) {
+                    self.interrupt_flag |= 0x08;
+                }
+            }
             0xFF04 => self.timer.reset_divider(),
             0xFF05 => self.timer.tima = value,
             0xFF06 => self.timer.tma = value,

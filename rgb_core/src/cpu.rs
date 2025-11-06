@@ -68,7 +68,6 @@ pub struct CPU {
     pub(crate) ime: bool,
     pub(crate) ime_scheduled: Option<u8>,
     halt_bug: bool,
-    halt_bug_restore_pc: Option<u16>,
 }
 
 impl Default for CPU {
@@ -80,10 +79,10 @@ impl Default for CPU {
 impl CPU {
     fn fetch_byte(&mut self, mmu: &mut impl MemoryBus) -> u8 {
         let byte = mmu.read_byte(self.reg.pc);
+        self.reg.pc = self.reg.pc.wrapping_add(1);
         if self.halt_bug {
             self.halt_bug = false;
-        } else {
-            self.reg.pc = self.reg.pc.wrapping_add(1);
+            self.reg.pc = self.reg.pc.wrapping_sub(1);
         }
         byte
     }
@@ -631,7 +630,6 @@ impl CPU {
             ime: false,
             ime_scheduled: None,
             halt_bug: false,
-            halt_bug_restore_pc: None,
         }
     }
 
@@ -643,7 +641,6 @@ impl CPU {
             ime: false,
             ime_scheduled: None,
             halt_bug: false,
-            halt_bug_restore_pc: None,
         }
     }
 
@@ -651,7 +648,6 @@ impl CPU {
     fn enter_halt_mode(&mut self) {
         self.halt_state = HaltState::Halted;
         self.halt_bug = false;
-        self.halt_bug_restore_pc = None;
         self.log_halt_enter();
     }
 
@@ -664,7 +660,6 @@ impl CPU {
     #[inline]
     fn trigger_halt_bug(&mut self) {
         self.halt_bug = true;
-        self.halt_bug_restore_pc = None;
         self.log_halt_bug();
         #[cfg(debug_assertions)]
         eprintln!("HALT bug triggered");
@@ -678,15 +673,11 @@ impl CPU {
         }
 
         let pc_before = self.reg.pc;
+        #[cfg(debug_assertions)]
         let bug_active = self.halt_bug;
         let opcode = self.fetch_byte(mmu);
+        #[cfg(debug_assertions)]
         if bug_active {
-            debug_assert!(
-                self.halt_bug_restore_pc.is_none(),
-                "halt bug restore should not already be pending"
-            );
-            self.halt_bug_restore_pc = Some(pc_before);
-            #[cfg(debug_assertions)]
             eprintln!(
                 "HALT bug fetch pc={:04X} opcode={:02X} bytes={:02X} {:02X} {:02X}",
                 pc_before,
@@ -729,14 +720,6 @@ impl CPU {
                 hl,
                 mmu.read_byte(hl)
             );
-        }
-
-        if let Some(pc) = self.halt_bug_restore_pc.take() {
-            self.reg.pc = pc;
-            #[cfg(debug_assertions)]
-            if pc_before == 0xC08B {
-                eprintln!("HALT bug restore pc set to {:04X}", self.reg.pc);
-            }
         }
 
         self.clock.record(total);
@@ -1902,6 +1885,7 @@ mod tests {
         let mut cpu = CPU::new();
         cpu.reg.pc = 0x0100;
         cpu.ime = false;
+        cpu.reg.d = 0x77;
 
         cpu.step(&mut bus); // Execute HALT, triggers bug and leaves CPU running
         assert_eq!(cpu.halt_state, HaltState::Running);
@@ -1912,12 +1896,15 @@ mod tests {
             "First instruction after HALT bug should consume the opcode as its operand"
         );
         assert_eq!(
-            cpu.reg.pc, 0x0101,
-            "PC should be rewound so the instruction executes twice"
+            cpu.reg.pc, 0x0102,
+            "PC should advance only once, landing on the byte that was meant to be the immediate"
         );
 
-        cpu.step(&mut bus); // Second execution of LD A,0x42
-        assert_eq!(cpu.reg.a, 0x42);
+        cpu.step(&mut bus); // Execute opcode at 0x0102 (0x42 == LD B,D)
+        assert_eq!(
+            cpu.reg.b, 0x77,
+            "Next opcode should execute using the old immediate byte"
+        );
         assert_eq!(cpu.reg.pc, 0x0103);
     }
 
@@ -1978,5 +1965,7 @@ mod tests {
         if !line.is_empty() {
             eprintln!("{line}");
         }
+
+        eprintln!("serial output: '{}'", gb.serial_output());
     }
 }
