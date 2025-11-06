@@ -10,3 +10,7 @@ trace = ["tracing"]
 
 [dependencies]
 tracing = { version = "0.1", optional = true }
+
+[dev-dependencies]
+ureq = { version = "2.9", features = ["tls"] }
+zip = { version = "0.6", default-features = false, features = ["deflate"] }
