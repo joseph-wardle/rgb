@@ -1,6 +1,8 @@
 use crate::apu::APU;
 use crate::cartridge::Cartridge;
 use crate::cpu::CPU;
+#[cfg(test)]
+use crate::memory::Memory;
 use crate::mmu::MMU;
 use crate::ppu::PPU;
 use crate::serial::Serial;
@@ -92,5 +94,12 @@ impl DMG {
 
     pub fn serial_output(&self) -> String {
         self.bus.serial().output_string()
+    }
+}
+
+#[cfg(test)]
+impl DMG {
+    pub(crate) fn peek_byte(&self, address: u16) -> u8 {
+        self.bus.read_byte(address)
     }
 }

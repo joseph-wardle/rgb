@@ -85,6 +85,16 @@ impl CPU {
 
     #[inline(always)]
     #[cfg(feature = "trace")]
+    pub(crate) fn log_stop_enter(&self) {
+        debug!(target: "gb::cpu", pc = %hex16!(self.registers().pc), "STOP entered");
+    }
+
+    #[inline(always)]
+    #[cfg(not(feature = "trace"))]
+    pub(crate) fn log_stop_enter(&self) {}
+
+    #[inline(always)]
+    #[cfg(feature = "trace")]
     pub(crate) fn log_halt_wake(&self) {
         debug!(target: "gb::cpu", pc = %hex16!(self.registers().pc), "HALT woken by pending interrupt");
     }
@@ -92,6 +102,38 @@ impl CPU {
     #[inline(always)]
     #[cfg(not(feature = "trace"))]
     pub(crate) fn log_halt_wake(&self) {}
+
+    #[inline(always)]
+    #[cfg(feature = "trace")]
+    pub(crate) fn log_halt_bug(&self) {
+        let regs = self.registers();
+        debug!(
+            target: "gb::cpu",
+            pc = %hex16!(regs.pc),
+            ime = self.ime,
+            halt = ?self.halt_state,
+            "HALT bug triggered"
+        );
+    }
+
+    #[inline(always)]
+    #[cfg(not(feature = "trace"))]
+    pub(crate) fn log_halt_bug(&self) {}
+
+    #[inline(always)]
+    #[cfg(feature = "trace")]
+    pub(crate) fn log_stop_speed_switch(&self, parameter: u8) {
+        debug!(
+            target: "gb::cpu",
+            pc = %hex16!(self.registers().pc),
+            value = %hex8!(parameter),
+            "STOP speed switch parameter ignored"
+        );
+    }
+
+    #[inline(always)]
+    #[cfg(not(feature = "trace"))]
+    pub(crate) fn log_stop_speed_switch(&self, _parameter: u8) {}
 
     #[inline(always)]
     #[cfg(feature = "trace")]

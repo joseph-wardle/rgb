@@ -56,6 +56,7 @@ impl MMU {
 
     pub(crate) fn step(&mut self, cycles: u16) {
         self.timer.step(cycles, &mut self.interrupt_flag);
+        self.ppu.step(cycles, &mut self.interrupt_flag);
         self.log_step(
             cycles,
             self.timer.div,
@@ -138,8 +139,14 @@ impl MMU {
             0xFF05 => self.timer.tima = value,
             0xFF06 => self.timer.tma = value,
             0xFF07 => self.timer.tac = value,
-            0xFF0F => self.interrupt_flag = value,
-            0xFFFF => self.interrupt_enable = value,
+            0xFF0F => {
+                eprintln!("IF write {:02X}", value);
+                self.interrupt_flag = value;
+            }
+            0xFFFF => {
+                eprintln!("IE write {:02X}", value);
+                self.interrupt_enable = value;
+            }
             0xFF10..=0xFF3F => self.apu.write_byte(address, value),
             0xFF40..=0xFF4B => self.ppu.write_byte(address, value),
             _ => (),
