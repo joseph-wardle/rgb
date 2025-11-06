@@ -63,19 +63,21 @@ impl Joypad {
     }
 
     pub(crate) fn is_pressed(&self, button: Button) -> bool {
-        let button_mask = match button {
-            Button::Start => 0b0000_1000,
-            Button::Select => 0b0000_0100,
-            Button::B => 0b0000_0010,
-            Button::A => 0b0000_0001,
-            Button::Down => 0b0000_1000,
-            Button::Up => 0b0000_0100,
-            Button::Left => 0b0000_0010,
-            Button::Right => 0b0000_0010,
-        };
+        let button_mask = Self::button_mask(button);
 
         let pressed = self.is_correct_select_pressed(button) && (self.state & button_mask == 0);
         self.log_button_query(button, pressed);
         pressed
+    }
+
+    #[inline]
+    fn button_mask(button: Button) -> u8 {
+        use Button::*;
+        match button {
+            Start | Down => 0b0000_1000,
+            Select | Up => 0b0000_0100,
+            B | Left => 0b0000_0010,
+            A | Right => 0b0000_0001,
+        }
     }
 }
