@@ -165,6 +165,7 @@ impl MapperKind {
     fn from_type_byte(byte: u8) -> Result<Self, CartridgeError> {
         match byte {
             0x00 => Ok(MapperKind::RomOnly),
+            #[allow(clippy::manual_range_patterns)]
             0x01 | 0x02 | 0x03 => Ok(MapperKind::Mbc1),
             other => Err(CartridgeError::UnsupportedCartridgeType(other)),
         }
