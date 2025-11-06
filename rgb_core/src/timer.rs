@@ -93,4 +93,11 @@ impl Timer {
         let index = (self.tac & 0b11) as usize;
         TIMA_PERIODS_MACHINE_CYCLES[index] * CPU_CYCLES_PER_MACHINE_CYCLE
     }
+
+    /// Writing to the DIV register clears the entire divider. This resets both the public register
+    /// and the hidden cycle counter that feeds it so the next increment starts from a clean phase.
+    pub(crate) fn reset_divider(&mut self) {
+        self.div = 0;
+        self.div_counter = 0;
+    }
 }
