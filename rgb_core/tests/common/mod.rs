@@ -1,5 +1,5 @@
+use rgb_core::cartridge::{Cartridge, CartridgeKind};
 use rgb_core::gameboy::DMG;
-use rgb_core::{cartridge::Cartridge, memory::Memory};
 use std::env;
 use std::fs;
 use std::io::{self, Read};
@@ -14,54 +14,18 @@ const READY_MARKER: &str = ".rgb_blargg_ready";
 
 static BLARGG_ROM_DIR: OnceLock<PathBuf> = OnceLock::new();
 
-pub struct RomCartridge {
-    data: Vec<u8>,
-}
-
-impl RomCartridge {
-    pub fn new(data: Vec<u8>) -> Self {
-        Self { data }
-    }
-}
-
-impl Memory for RomCartridge {
-    fn read_byte(&self, address: u16) -> u8 {
-        let addr = address as usize;
-        self.data.get(addr).copied().unwrap_or(0)
-    }
-
-    fn write_byte(&mut self, _address: u16, _value: u8) {}
-}
-
-struct TestCartridge(RomCartridge);
-
-impl TestCartridge {
-    fn new(data: Vec<u8>) -> Self {
-        Self(RomCartridge::new(data))
-    }
-}
-
-impl Memory for TestCartridge {
-    fn read_byte(&self, address: u16) -> u8 {
-        self.0.read_byte(address)
-    }
-
-    fn write_byte(&mut self, address: u16, value: u8) {
-        self.0.write_byte(address, value)
-    }
-}
-
-impl Cartridge for TestCartridge {}
-
 fn run_rom(path: &Path) -> String {
     let data = fs::read(path).unwrap_or_else(|err| {
         panic!("failed to read ROM from {}: {err}", path.display());
     });
-    let rom = Box::new(TestCartridge::new(data));
+    let cartridge = CartridgeKind::from_bytes(data).unwrap_or_else(|err| {
+        panic!("failed to parse cartridge from {}: {err}", path.display());
+    });
+    let rom: Box<dyn Cartridge> = Box::new(cartridge);
     let mut gb = DMG::new(rom);
 
     const MAX_FRAMES: usize = 10_000_000;
-    const TIMEOUT: Duration = Duration::from_secs(240);
+    const TIMEOUT: Duration = Duration::from_secs(60);
 
     let mut last_serial_len = 0;
     let start = Instant::now();
