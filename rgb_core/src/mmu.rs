@@ -6,20 +6,50 @@ use crate::ppu::PPU;
 use crate::serial::Serial;
 use crate::timer::Timer;
 
-#[expect(clippy::upper_case_acronyms)]
-pub(crate) struct MMU {
+// Bus/Devices: MMU owns Devices + RAM + Interrupts.
+struct Devices {
     cartridge: Box<dyn Cartridge>, // Cartridge memory
     apu: APU,                      // Audio Processing Unit
     ppu: PPU,                      // Graphics Processing Unit
     joypad: Joypad,                // Joypad input
     serial: Serial,                // Serial communication
     timer: Timer,                  // Timer
+}
 
+impl Devices {
+    fn new(cartridge: Box<dyn Cartridge>) -> Self {
+        Self {
+            cartridge,
+            apu: APU::new(),
+            ppu: PPU::new(),
+            joypad: Joypad::new(),
+            serial: Serial::new(),
+            timer: Timer::new(),
+        }
+    }
+}
+
+struct Interrupts {
     // | 7  6  5 |   4    |   3    |   2   |  1  |   0    |
     // | ------- | ------ | ------ | ----- | --- | ------ |
     // |         | Joypad | Serial | Timer | LCD | VBlank |
-    interrupt_flag: u8, // Interrupt flag
-    interrupt_enable: u8,
+    flag: u8,
+    enable: u8,
+}
+
+impl Interrupts {
+    fn new() -> Self {
+        Self {
+            flag: 0x00,
+            enable: 0x00,
+        }
+    }
+}
+
+#[expect(clippy::upper_case_acronyms)]
+pub(crate) struct MMU {
+    devices: Devices,
+    interrupts: Interrupts,
 
     hram: [u8; 0x7F],   // High RAM
     wram: [u8; 0x8000], // Work RAM
@@ -39,15 +69,8 @@ enum MemoryRegion {
 impl MMU {
     pub(crate) fn new(cartridge: Box<dyn Cartridge>) -> Self {
         MMU {
-            cartridge,
-            apu: APU::new(),
-            ppu: PPU::new(),
-            joypad: Joypad::new(),
-            serial: Serial::new(),
-            timer: Timer::new(),
-
-            interrupt_flag: 0x00,
-            interrupt_enable: 0x00,
+            devices: Devices::new(cartridge),
+            interrupts: Interrupts::new(),
             hram: [0x00; 0x7F],
             wram: [0x00; 0x8000],
             wram_bank: 1,
@@ -55,15 +78,16 @@ impl MMU {
     }
 
     pub(crate) fn step(&mut self, cycles: u16) {
-        self.timer.step(cycles, &mut self.interrupt_flag);
+        self.devices.timer.step(cycles, &mut self.interrupts.flag);
+        self.devices.ppu.step(cycles, &mut self.interrupts.flag);
         self.log_step(
             cycles,
-            self.timer.div,
-            self.timer.tima,
-            self.timer.tma,
-            self.timer.tac,
-            self.interrupt_flag,
-            self.interrupt_enable,
+            self.devices.timer.div,
+            self.devices.timer.tima,
+            self.devices.timer.tma,
+            self.devices.timer.tac,
+            self.interrupts.flag,
+            self.interrupts.enable,
         );
     }
 
@@ -112,17 +136,17 @@ impl MMU {
 
     fn read_io(&self, address: u16) -> u8 {
         let value = match address {
-            0xFF00 => self.joypad.state,
-            0xFF01 => self.serial.sb,
-            0xFF02 => self.serial.sc,
-            0xFF04 => self.timer.div,
-            0xFF05 => self.timer.tima,
-            0xFF06 => self.timer.tma,
-            0xFF07 => self.timer.tac,
-            0xFF0F => self.interrupt_flag,
-            0xFFFF => self.interrupt_enable,
-            0xFF10..=0xFF3F => self.apu.read_byte(address),
-            0xFF40..=0xFF4B => self.ppu.read_byte(address),
+            0xFF00 => self.devices.joypad.state,
+            0xFF01 => self.devices.serial.sb,
+            0xFF02 => self.devices.serial.sc,
+            0xFF04 => self.devices.timer.div,
+            0xFF05 => self.devices.timer.tima,
+            0xFF06 => self.devices.timer.tma,
+            0xFF07 => self.devices.timer.tac,
+            0xFF0F => self.interrupts.flag,
+            0xFFFF => self.interrupts.enable,
+            0xFF10..=0xFF3F => self.devices.apu.read_byte(address),
+            0xFF40..=0xFF4B => self.devices.ppu.read_byte(address),
             _ => 0,
         };
         self.log_io_read(address, value);
@@ -131,17 +155,27 @@ impl MMU {
 
     fn write_io(&mut self, address: u16, value: u8) {
         match address {
-            0xFF00 => self.joypad.write_select(value),
-            0xFF01 => self.serial.write_data(value),
-            0xFF02 => self.serial.write_control(value),
-            0xFF04 => self.timer.div = 0,
-            0xFF05 => self.timer.tima = value,
-            0xFF06 => self.timer.tma = value,
-            0xFF07 => self.timer.tac = value,
-            0xFF0F => self.interrupt_flag = value,
-            0xFFFF => self.interrupt_enable = value,
-            0xFF10..=0xFF3F => self.apu.write_byte(address, value),
-            0xFF40..=0xFF4B => self.ppu.write_byte(address, value),
+            0xFF00 => self.devices.joypad.write_select(value),
+            0xFF01 => self.devices.serial.write_data(value),
+            0xFF02 => {
+                if self.devices.serial.write_control(value) {
+                    self.interrupts.flag |= 0x08;
+                }
+            }
+            0xFF04 => self.devices.timer.reset_divider(),
+            0xFF05 => self.devices.timer.tima = value,
+            0xFF06 => self.devices.timer.tma = value,
+            0xFF07 => self.devices.timer.tac = value,
+            0xFF0F => {
+                eprintln!("IF write {:02X}", value);
+                self.interrupts.flag = value;
+            }
+            0xFFFF => {
+                eprintln!("IE write {:02X}", value);
+                self.interrupts.enable = value;
+            }
+            0xFF10..=0xFF3F => self.devices.apu.write_byte(address, value),
+            0xFF40..=0xFF4B => self.devices.ppu.write_byte(address, value),
             _ => (),
         }
         self.log_io_write(address, value);
@@ -151,8 +185,8 @@ impl MMU {
 impl Memory for MMU {
     fn read_byte(&self, address: u16) -> u8 {
         match self.get_memory_region(address) {
-            MemoryRegion::Cartridge => self.cartridge.read_byte(address),
-            MemoryRegion::PPU => self.ppu.read_byte(address),
+            MemoryRegion::Cartridge => self.devices.cartridge.read_byte(address),
+            MemoryRegion::PPU => self.devices.ppu.read_byte(address),
             MemoryRegion::WRAM => self.read_wram(address),
             MemoryRegion::HRAM => self.hram[address as usize - 0xFF80],
             MemoryRegion::IO => self.read_io(address),
@@ -162,8 +196,8 @@ impl Memory for MMU {
 
     fn write_byte(&mut self, address: u16, value: u8) {
         match self.get_memory_region(address) {
-            MemoryRegion::Cartridge => self.cartridge.write_byte(address, value),
-            MemoryRegion::PPU => self.ppu.write_byte(address, value),
+            MemoryRegion::Cartridge => self.devices.cartridge.write_byte(address, value),
+            MemoryRegion::PPU => self.devices.ppu.write_byte(address, value),
             MemoryRegion::WRAM => self.write_wram(address, value),
             MemoryRegion::HRAM => self.hram[address as usize - 0xFF80] = value,
             MemoryRegion::IO => self.write_io(address, value),
@@ -176,6 +210,6 @@ impl MemoryBus for MMU {}
 
 impl MMU {
     pub(crate) fn serial(&self) -> &Serial {
-        &self.serial
+        &self.devices.serial
     }
 }

@@ -16,6 +16,7 @@ pub(crate) struct PPU {
     obj_palette1: u8,   // Object Palette 1 Data
     window_y: u8,       // Window Y Position
     window_x: u8,       // Window X Position
+    cycle_counter: u32, // Accumulated PPU cycles since last VBlank
 }
 
 impl Default for PPU {
@@ -41,6 +42,29 @@ impl PPU {
             obj_palette1: 0,
             window_y: 0,
             window_x: 0,
+            cycle_counter: 0,
+        }
+    }
+
+    pub(crate) fn step(&mut self, cycles: u16, interrupt_flag: &mut u8) {
+        const CYCLES_PER_FRAME: u32 = 70_224;
+        const LCD_ENABLE: u8 = 0x80;
+
+        if (self.lcd_control & LCD_ENABLE) == 0 {
+            // When the LCD is disabled, the PPU stops ticking and no VBlank interrupts fire.
+            self.cycle_counter = 0;
+            return;
+        }
+
+        self.cycle_counter = self.cycle_counter.wrapping_add(cycles as u32);
+        if self.cycle_counter >= CYCLES_PER_FRAME {
+            self.cycle_counter -= CYCLES_PER_FRAME;
+            #[cfg(debug_assertions)]
+            eprintln!(
+                "PPU VBlank: setting IF bit. Previous IF: {:02X}",
+                *interrupt_flag
+            );
+            *interrupt_flag |= 0x01; // VBlank interrupt
         }
     }
 }

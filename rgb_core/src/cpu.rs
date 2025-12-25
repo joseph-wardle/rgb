@@ -67,6 +67,7 @@ pub struct CPU {
     pub(crate) halt_state: HaltState,
     pub(crate) ime: bool,
     pub(crate) ime_scheduled: Option<u8>,
+    halt_bug: bool,
 }
 
 impl Default for CPU {
@@ -78,14 +79,18 @@ impl Default for CPU {
 impl CPU {
     fn fetch_byte(&mut self, mmu: &mut impl MemoryBus) -> u8 {
         let byte = mmu.read_byte(self.reg.pc);
-        self.reg.pc += 1;
+        self.reg.pc = self.reg.pc.wrapping_add(1);
+        if self.halt_bug {
+            self.halt_bug = false;
+            self.reg.pc = self.reg.pc.wrapping_sub(1);
+        }
         byte
     }
 
     fn fetch_word(&mut self, mmu: &mut impl MemoryBus) -> u16 {
-        let word = mmu.read_word(self.reg.pc);
-        self.reg.pc += 2;
-        word
+        let lo = self.fetch_byte(mmu) as u16;
+        let hi = self.fetch_byte(mmu) as u16;
+        (hi << 8) | lo
     }
 
     fn push(&mut self, mmu: &mut impl MemoryBus, value: u16) {
@@ -367,32 +372,39 @@ impl CPU {
     // HALF_CARRY - Reset
     // CARRY      - Set or reset according to operation
     fn daa(&mut self) {
-        let mut a = self.reg.a;
-        let mut adjust = 0;
-        let mut carry = self.reg.get_flag(CARRY);
+        const LOW_ADJUST: u8 = 0x06;
+        const HIGH_ADJUST: u8 = 0x60;
 
-        if self.reg.get_flag(SUBTRACT) {
+        let mut a = self.reg.a;
+        let mut adjust: u8 = 0;
+        let subtract = self.reg.get_flag(SUBTRACT);
+        let mut carry_out = self.reg.get_flag(CARRY);
+
+        if subtract {
             if self.reg.get_flag(HALF_CARRY) {
-                adjust |= 0x06;
+                adjust |= LOW_ADJUST;
             }
             if self.reg.get_flag(CARRY) {
-                adjust |= 0x60;
+                adjust |= HIGH_ADJUST;
             }
             a = a.wrapping_sub(adjust);
         } else {
-            if self.reg.get_flag(HALF_CARRY) || (a & 0x0F) > 9 {
-                adjust |= 0x06;
+            let lower_nibble_overflow = (a & 0x0F) > 0x09;
+            if self.reg.get_flag(HALF_CARRY) || lower_nibble_overflow {
+                adjust |= LOW_ADJUST;
             }
-            if self.reg.get_flag(CARRY) || a > 0x99 {
-                adjust |= 0x60;
-                carry = true;
+            let upper_overflow = a > 0x99;
+            if self.reg.get_flag(CARRY) || upper_overflow {
+                adjust |= HIGH_ADJUST;
+                carry_out = true;
             }
             a = a.wrapping_add(adjust);
         }
 
         self.reg.set_flag(ZERO, a == 0);
+        self.reg.set_flag(SUBTRACT, subtract);
         self.reg.set_flag(HALF_CARRY, false);
-        self.reg.set_flag(CARRY, carry);
+        self.reg.set_flag(CARRY, carry_out);
 
         self.reg.a = a;
     }
@@ -617,6 +629,7 @@ impl CPU {
             halt_state: HaltState::Running,
             ime: false,
             ime_scheduled: None,
+            halt_bug: false,
         }
     }
 
@@ -627,7 +640,29 @@ impl CPU {
             halt_state: HaltState::Running,
             ime: false,
             ime_scheduled: None,
+            halt_bug: false,
         }
+    }
+
+    #[inline]
+    fn enter_halt_mode(&mut self) {
+        self.halt_state = HaltState::Halted;
+        self.halt_bug = false;
+        self.log_halt_enter();
+    }
+
+    #[inline]
+    fn enter_stop_mode(&mut self) {
+        // Without host input wiring we temporarily treat STOP as a 4-cycle NOP.
+        self.log_stop_enter();
+    }
+
+    #[inline]
+    fn trigger_halt_bug(&mut self) {
+        self.halt_bug = true;
+        self.log_halt_bug();
+        #[cfg(debug_assertions)]
+        eprintln!("HALT bug triggered");
     }
 
     pub(crate) fn step(&mut self, mmu: &mut impl MemoryBus) -> u8 {
@@ -638,7 +673,20 @@ impl CPU {
         }
 
         let pc_before = self.reg.pc;
+        #[cfg(debug_assertions)]
+        let bug_active = self.halt_bug;
         let opcode = self.fetch_byte(mmu);
+        #[cfg(debug_assertions)]
+        if bug_active {
+            eprintln!(
+                "HALT bug fetch pc={:04X} opcode={:02X} bytes={:02X} {:02X} {:02X}",
+                pc_before,
+                opcode,
+                mmu.read_byte(pc_before),
+                mmu.read_byte(pc_before.wrapping_add(1)),
+                mmu.read_byte(pc_before.wrapping_add(2))
+            );
+        }
 
         self.log_inst_start(pc_before, opcode);
 
@@ -646,6 +694,33 @@ impl CPU {
         let total = cycles.total();
 
         self.log_inst_done(opcode, total, cycles.took_conditional);
+
+        #[cfg(debug_assertions)]
+        if pc_before == 0xC08B {
+            eprintln!(
+                "HALT bug exec pc_before={:04X} opcode={:02X} pc_after(before restore)={:04X} DE={:04X}",
+                pc_before,
+                opcode,
+                self.reg.pc,
+                self.reg.get_de()
+            );
+        }
+        #[cfg(debug_assertions)]
+        if pc_before == 0xC818 {
+            let hl = self.reg.get_hl();
+            eprintln!(
+                "PC=C818 opcode={:02X} imm={:02X} A={:02X} B={:02X} C={:02X} D={:02X} E={:02X} HL={:04X} [HL]={:02X}",
+                opcode,
+                mmu.read_byte(pc_before.wrapping_add(1)),
+                self.reg.a,
+                self.reg.b,
+                self.reg.c,
+                self.reg.d,
+                self.reg.e,
+                hl,
+                mmu.read_byte(hl)
+            );
+        }
 
         self.clock.record(total);
         self.advance_ime_schedule();
@@ -841,7 +916,13 @@ impl CPU {
             } // JR C,imm8
 
             // STOP
-            0x10 => self.reg.pc += 1, // STOP
+            0x10 => {
+                let parameter = self.fetch_byte(mmu);
+                if parameter != 0 {
+                    self.log_stop_speed_switch(parameter);
+                }
+                self.enter_stop_mode();
+            } // STOP
 
             // LD r8, r8
             0x40 => {}                                             // LD B,B (no op)
@@ -917,8 +998,14 @@ impl CPU {
 
             // HALT
             0x76 => {
-                self.halt_state = HaltState::Halted;
-                self.log_halt_enter();
+                let pending = self.pending_interrupt_mask(mmu);
+                #[cfg(debug_assertions)]
+                eprintln!("HALT executed: ime={} pending={:02X}", self.ime, pending);
+                if !self.ime && pending != 0 {
+                    self.trigger_halt_bug();
+                } else {
+                    self.enter_halt_mode();
+                }
             } // HALT
 
             // ADD A, r8
@@ -1670,16 +1757,22 @@ impl CPU {
     }
 
     fn step_halt_state(&mut self, mmu: &mut impl MemoryBus) -> Option<u8> {
-        if self.halt_state == HaltState::Running {
-            return None;
-        }
-
-        if self.interrupts_pending(mmu) {
-            self.halt_state = HaltState::Running;
-            self.log_halt_wake();
-            None
-        } else {
-            Some(4)
+        match self.halt_state {
+            HaltState::Running => None,
+            HaltState::Halted => {
+                if self.interrupts_pending(mmu) {
+                    if !self.ime {
+                        self.trigger_halt_bug();
+                        #[cfg(debug_assertions)]
+                        eprintln!("HALT bug triggered (woken from HALT)");
+                    }
+                    self.halt_state = HaltState::Running;
+                    self.log_halt_wake();
+                    None
+                } else {
+                    Some(4)
+                }
+            }
         }
     }
 
@@ -1745,5 +1838,134 @@ impl CPU {
         }
 
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::memory::Memory;
+
+    struct DummyBus {
+        mem: [u8; 0x10000],
+    }
+
+    impl DummyBus {
+        fn new() -> Self {
+            Self { mem: [0; 0x10000] }
+        }
+    }
+
+    impl Memory for DummyBus {
+        fn read_byte(&self, address: u16) -> u8 {
+            self.mem[address as usize]
+        }
+
+        fn write_byte(&mut self, address: u16, value: u8) {
+            self.mem[address as usize] = value;
+        }
+    }
+
+    impl MemoryBus for DummyBus {}
+
+    #[test]
+    fn halt_bug_repeats_instruction_with_glitch() {
+        let mut bus = DummyBus::new();
+        // Program layout:
+        // 0x100: HALT
+        // 0x101: LD A,0x42
+        // 0x102: 0x42 (immediate)
+        bus.mem[0x100] = 0x76;
+        bus.mem[0x101] = 0x3E;
+        bus.mem[0x102] = 0x42;
+        bus.mem[0x103] = 0x00;
+        bus.mem[0xFFFF] = 0x01; // IE: enable VBlank
+        bus.mem[0xFF0F] = 0x01; // IF: request VBlank
+
+        let mut cpu = CPU::new();
+        cpu.reg.pc = 0x0100;
+        cpu.ime = false;
+        cpu.reg.d = 0x77;
+
+        cpu.step(&mut bus); // Execute HALT, triggers bug and leaves CPU running
+        assert_eq!(cpu.halt_state, HaltState::Running);
+
+        cpu.step(&mut bus); // First execution of LD A,0x42 (glitched)
+        assert_eq!(
+            cpu.reg.a, 0x3E,
+            "First instruction after HALT bug should consume the opcode as its operand"
+        );
+        assert_eq!(
+            cpu.reg.pc, 0x0102,
+            "PC should advance only once, landing on the byte that was meant to be the immediate"
+        );
+
+        cpu.step(&mut bus); // Execute opcode at 0x0102 (0x42 == LD B,D)
+        assert_eq!(
+            cpu.reg.b, 0x77,
+            "Next opcode should execute using the old immediate byte"
+        );
+        assert_eq!(cpu.reg.pc, 0x0103);
+    }
+
+    #[test]
+    #[ignore = "debug helper"]
+    fn debug_halt_bug_rom_once() {
+        use crate::cartridge::CartridgeKind;
+        use crate::gameboy::DMG;
+        use std::path::PathBuf;
+
+        let rom_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("workspace root")
+            .join("target/blargg-test-roms/halt_bug.gb");
+        let data =
+            std::fs::read(&rom_path).expect("failed to read halt_bug.gb (run blargg download?)");
+        let cart = CartridgeKind::from_bytes(data).expect("failed to parse cartridge");
+        let mut gb = DMG::new(Box::new(cart));
+
+        for frame in 0..200 {
+            gb.step_frame();
+            if frame % 10 == 0 {
+                eprintln!(
+                    "frame {} pc={:04X} serial='{}'",
+                    frame,
+                    gb.cpu().registers().pc,
+                    gb.serial_output()
+                );
+            }
+        }
+
+        eprintln!("code @C080:");
+        let mut line = String::new();
+        for (i, addr) in (0xC080u16..0xC0A0).enumerate() {
+            if i % 8 == 0 {
+                if !line.is_empty() {
+                    eprintln!("{line}");
+                }
+                line = format!("{addr:04X}:");
+            }
+            line.push_str(&format!(" {:02X}", gb.peek_byte(addr)));
+        }
+        if !line.is_empty() {
+            eprintln!("{line}");
+        }
+
+        eprintln!("data @C210:");
+        line.clear();
+        for (i, addr) in (0xC210u16..0xC230).enumerate() {
+            if i % 8 == 0 {
+                if !line.is_empty() {
+                    eprintln!("{line}");
+                }
+                line = format!("{addr:04X}:");
+            }
+            line.push_str(&format!(" {:02X}", gb.peek_byte(addr)));
+        }
+        if !line.is_empty() {
+            eprintln!("{line}");
+        }
+
+        eprintln!("serial output: '{}'", gb.serial_output());
     }
 }

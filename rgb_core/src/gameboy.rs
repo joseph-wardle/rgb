@@ -1,18 +1,14 @@
-use crate::apu::APU;
 use crate::cartridge::Cartridge;
 use crate::cpu::CPU;
+#[cfg(test)]
+use crate::memory::Memory;
 use crate::mmu::MMU;
-use crate::ppu::PPU;
 use crate::serial::Serial;
 
-#[expect(
-    dead_code,
-    reason = "PPU is not fully implemented yet, but will be used in the future when rendering is added"
-)]
+// Architecture (grep: "Bus/Devices"):
+// DMG owns CPU + Bus. Bus (MMU) owns Devices + RAM + Interrupts.
 pub struct DMG {
     cpu: CPU,
-    ppu: PPU,
-    apu: APU,
     bus: MMU,
 }
 
@@ -20,8 +16,6 @@ impl DMG {
     pub fn new(cartridge: Box<dyn Cartridge>) -> Self {
         let dmg = Self {
             cpu: CPU::new(),
-            ppu: PPU::new(),
-            apu: APU::new(),
             bus: MMU::new(cartridge),
         };
         dmg.log_power_on("cold");
@@ -31,8 +25,6 @@ impl DMG {
     pub fn new_post_bios(cartridge: Box<dyn Cartridge>) -> Self {
         let dmg = Self {
             cpu: CPU::new_post_bios(),
-            ppu: PPU::new(),
-            apu: APU::new(),
             bus: MMU::new(cartridge),
         };
         dmg.log_power_on("post_bios");
@@ -92,5 +84,12 @@ impl DMG {
 
     pub fn serial_output(&self) -> String {
         self.bus.serial().output_string()
+    }
+}
+
+#[cfg(test)]
+impl DMG {
+    pub(crate) fn peek_byte(&self, address: u16) -> u8 {
+        self.bus.read_byte(address)
     }
 }

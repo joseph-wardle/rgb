@@ -1,3 +1,15 @@
+/// Number of CPU clock cycles per machine cycle on the DMG.
+const CPU_CYCLES_PER_MACHINE_CYCLE: u16 = 4;
+/// The divider register (`DIV`) increments every 256 machine cycles.
+const DIV_PERIOD_MACHINE_CYCLES: u16 = 256;
+/// TIMA periods expressed in machine cycles for each TAC clock select value.
+const TIMA_PERIODS_MACHINE_CYCLES: [u16; 4] = [
+    256, // 00: 4096 Hz
+    4,   // 01: 262_144 Hz
+    16,  // 10: 65_536 Hz
+    64,  // 11: 16_384 Hz
+];
+
 #[derive(Debug, Default)]
 pub(crate) struct Timer {
     // This register is incremented at a rate of 16384Hz (~16779Hz on SGB). Writing any value to
@@ -49,19 +61,14 @@ impl Timer {
 
     pub(crate) fn step(&mut self, cycles: u16, interrupt_flag: &mut u8) {
         self.div_counter = self.div_counter.wrapping_add(cycles);
-        while self.div_counter >= 256 {
-            self.div_counter -= 256;
+        let div_threshold = DIV_PERIOD_MACHINE_CYCLES * CPU_CYCLES_PER_MACHINE_CYCLE;
+        while self.div_counter >= div_threshold {
+            self.div_counter -= div_threshold;
             self.div = self.div.wrapping_add(1);
         }
 
-        if self.tac & 0b100 != 0 {
-            let threshold = match self.tac & 0b11 {
-                0b00 => 1024,
-                0b01 => 16,
-                0b10 => 64,
-                0b11 => 256,
-                _ => 1024,
-            };
+        if self.timer_enabled() {
+            let threshold = self.tima_period_cpu_cycles();
 
             self.tima_counter = self.tima_counter.wrapping_add(cycles);
             while self.tima_counter >= threshold {
@@ -74,5 +81,23 @@ impl Timer {
                 }
             }
         }
+    }
+
+    #[inline]
+    fn timer_enabled(&self) -> bool {
+        (self.tac & 0b100) != 0
+    }
+
+    #[inline]
+    fn tima_period_cpu_cycles(&self) -> u16 {
+        let index = (self.tac & 0b11) as usize;
+        TIMA_PERIODS_MACHINE_CYCLES[index] * CPU_CYCLES_PER_MACHINE_CYCLE
+    }
+
+    /// Writing to the DIV register clears the entire divider. This resets both the public register
+    /// and the hidden cycle counter that feeds it so the next increment starts from a clean phase.
+    pub(crate) fn reset_divider(&mut self) {
+        self.div = 0;
+        self.div_counter = 0;
     }
 }
