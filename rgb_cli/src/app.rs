@@ -1,5 +1,6 @@
 use std::ffi::OsString;
 
+use crate::config::RunConfig;
 use crate::error::CliError;
 
 /// Thin application object that owns the process arguments.
@@ -24,10 +25,10 @@ impl App {
 
     pub(crate) fn run(self) -> Result<(), CliError> {
         self.ensure_program_name_is_present()?;
+        let _config = self.parse_run_config()?;
 
-        // Argument parsing and runtime orchestration are implemented in later
-        // Milestone 1 steps. Returning success here keeps this step focused on
-        // crate structure and testability.
+        // Runtime orchestration is implemented in later Milestone 1 steps.
+        // This step is focused on producing a validated typed configuration.
         Ok(())
     }
 
@@ -39,6 +40,11 @@ impl App {
         }
 
         Ok(())
+    }
+
+    fn parse_run_config(&self) -> Result<RunConfig, CliError> {
+        let user_args = self.raw_args.iter().skip(1).cloned();
+        RunConfig::parse_cli_args(user_args).map_err(|error| CliError::usage(error.to_string()))
     }
 }
 
@@ -57,8 +63,17 @@ mod tests {
     }
 
     #[test]
-    fn app_accepts_standard_process_argument_vector() {
-        let result = App::from_args(["rgb_cli"]);
+    fn app_requires_user_rom_path_after_program_name() {
+        let result = App::from_args(["rgb_cli"]).run();
+        let error = result.expect_err("expected usage error");
+
+        assert_eq!(error.kind(), CliErrorKind::Usage);
+        assert_eq!(error.exit_code(), 2);
+    }
+
+    #[test]
+    fn app_accepts_standard_process_argument_vector_with_rom() {
+        let result = App::from_args(["rgb_cli", "rom.gb"]);
         assert!(result.run().is_ok());
     }
 }
