@@ -21,6 +21,7 @@
 The board below is the practical path to a full first-pass emulator that is functional top-to-bottom while staying small, readable, and educational.
 
 ### M1. Runnable Host Flow (`rgb_cli`)
+- [x] Publish a CLI contract before implementation details: [`rgb_cli/CLI_CONTRACT.md`](rgb_cli/CLI_CONTRACT.md).
 - [ ] Replace the placeholder CLI with ROM loading, startup config, and a clear main loop.
 - [ ] Add debug/trace toggles that help learning without cluttering default output.
 - [ ] Ensure errors are user-friendly (bad path, unsupported mapper, invalid ROM, etc.).
