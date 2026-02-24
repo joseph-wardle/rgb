@@ -34,7 +34,8 @@ impl App {
                 print!("{output}");
                 Ok(())
             }
-            CliRequest::Run(_config) => {
+            CliRequest::Run(config) => {
+                self.validate_feature_gates(&config)?;
                 // Runtime orchestration is implemented in later Milestone 1
                 // steps. By this point, arguments are fully validated and typed.
                 Ok(())
@@ -44,7 +45,7 @@ impl App {
 
     fn ensure_program_name_is_present(&self) -> Result<(), CliError> {
         if self.raw_args.is_empty() {
-            return Err(CliError::runtime(
+            return Err(CliError::runtime_setup(
                 "process argument vector was unexpectedly empty",
             ));
         }
@@ -54,13 +55,24 @@ impl App {
 
     fn parse_cli_request(&self) -> Result<CliRequest, CliError> {
         let user_args = self.raw_args.iter().skip(1).cloned();
-        RunConfig::parse_cli_request(user_args).map_err(|error| CliError::usage(error.to_string()))
+        RunConfig::parse_cli_request(user_args).map_err(CliError::from)
+    }
+
+    fn validate_feature_gates(&self, config: &RunConfig) -> Result<(), CliError> {
+        if config.trace {
+            #[cfg(not(feature = "trace"))]
+            {
+                return Err(CliError::TraceFeatureRequired);
+            }
+        }
+
+        Ok(())
     }
 
     #[cfg(test)]
     fn parse_run_config_for_test(&self) -> Result<RunConfig, CliError> {
         let user_args = self.raw_args.iter().skip(1).cloned();
-        RunConfig::parse_cli_args(user_args).map_err(|error| CliError::usage(error.to_string()))
+        RunConfig::parse_cli_args(user_args).map_err(CliError::from)
     }
 }
 
@@ -92,6 +104,28 @@ mod tests {
     fn app_accepts_standard_process_argument_vector_with_rom() {
         let result = App::from_args(["rgb_cli", "rom.gb"]);
         assert!(result.run().is_ok());
+    }
+
+    #[cfg(not(feature = "trace"))]
+    #[test]
+    fn app_rejects_trace_flag_without_trace_feature() {
+        let result = App::from_args(["rgb_cli", "--trace", "rom.gb"]).run();
+        let error = result.expect_err("expected trace feature-gate error");
+
+        assert_eq!(error.kind(), CliErrorKind::Runtime);
+        assert_eq!(error.exit_code(), 1);
+        assert!(
+            error
+                .to_string()
+                .contains("Rebuild with `--features trace`")
+        );
+    }
+
+    #[cfg(feature = "trace")]
+    #[test]
+    fn app_accepts_trace_flag_with_trace_feature_enabled() {
+        let result = App::from_args(["rgb_cli", "--trace", "rom.gb"]).run();
+        assert!(result.is_ok());
     }
 
     #[test]

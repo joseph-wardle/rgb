@@ -3,6 +3,10 @@ name = "rgb_cli"
 version = "0.1.0"
 edition = "2024"
 
+[features]
+trace = ["rgb_core/trace"]
+
 [dependencies]
 clap = "4.5"
 rgb_core = { path = "../rgb_core" }
+thiserror = "2.0"
