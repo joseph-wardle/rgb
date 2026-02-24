@@ -8,7 +8,7 @@ mod app;
 mod config;
 mod error;
 
-pub use config::{BootMode, ConfigError, RunConfig, SerialMode};
+pub use config::{BootMode, CliRequest, ConfigError, RunConfig, SerialMode};
 pub use error::{CliError, CliErrorKind, CliExitCode};
 
 /// Runs the CLI application using the current process argument vector.
@@ -41,6 +41,12 @@ mod tests {
     #[test]
     fn run_with_args_is_invocable_without_subprocesses() {
         let result = run_with_args(["rgb_cli", "rom.gb"]);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn run_with_args_accepts_help_flow() {
+        let result = run_with_args(["rgb_cli", "--help"]);
         assert!(result.is_ok());
     }
 }

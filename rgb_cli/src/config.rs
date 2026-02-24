@@ -4,12 +4,26 @@ use std::fmt::{self, Display, Formatter};
 use std::num::NonZeroU64;
 use std::path::PathBuf;
 
+use clap::builder::ValueParser;
+use clap::error::ErrorKind;
+use clap::{Arg, ArgAction, Command, ValueHint};
+
 /// Selects the CPU/boot initialization path used to construct `DMG`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum BootMode {
     Cold,
     #[default]
     PostBios,
+}
+
+impl BootMode {
+    fn from_cli_value(value: &str) -> Option<Self> {
+        match value {
+            "cold" => Some(BootMode::Cold),
+            "post-bios" => Some(BootMode::PostBios),
+            _ => None,
+        }
+    }
 }
 
 impl Display for BootMode {
@@ -28,6 +42,17 @@ pub enum SerialMode {
     Off,
     Live,
     Final,
+}
+
+impl SerialMode {
+    fn from_cli_value(value: &str) -> Option<Self> {
+        match value {
+            "off" => Some(SerialMode::Off),
+            "live" => Some(SerialMode::Live),
+            "final" => Some(SerialMode::Final),
+            _ => None,
+        }
+    }
 }
 
 impl Display for SerialMode {
@@ -51,235 +76,175 @@ pub struct RunConfig {
     pub trace: bool,
 }
 
+/// Top-level CLI request derived from parsed user arguments.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CliRequest {
+    Run(RunConfig),
+    Help(String),
+    Version(String),
+}
+
 impl RunConfig {
-    /// Parses CLI arguments (excluding argv[0]) into a validated configuration.
+    /// Parses CLI arguments (excluding argv[0]) into a validated run configuration.
     pub fn parse_cli_args<I, S>(args: I) -> Result<Self, ConfigError>
     where
         I: IntoIterator<Item = S>,
         S: Into<OsString>,
     {
-        let raw_args: Vec<OsString> = args.into_iter().map(Into::into).collect();
-        let mut parser = RunConfigParser::new(raw_args);
-        parser.parse()
+        match Self::parse_cli_request(args)? {
+            CliRequest::Run(config) => Ok(config),
+            CliRequest::Help(text) => Err(ConfigError::new(text)),
+            CliRequest::Version(text) => Err(ConfigError::new(text)),
+        }
+    }
+
+    /// Parses CLI arguments (excluding argv[0]) into a high-level request.
+    pub fn parse_cli_request<I, S>(args: I) -> Result<CliRequest, ConfigError>
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<OsString>,
+    {
+        let argv = std::iter::once(OsString::from("rgb_cli"))
+            .chain(args.into_iter().map(Into::into))
+            .collect::<Vec<_>>();
+
+        let mut command = build_cli_command();
+        match command.try_get_matches_from_mut(argv) {
+            Ok(matches) => Ok(CliRequest::Run(run_config_from_matches(matches)?)),
+            Err(error) => match error.kind() {
+                ErrorKind::DisplayHelp => Ok(CliRequest::Help(error.to_string())),
+                ErrorKind::DisplayVersion => Ok(CliRequest::Version(error.to_string())),
+                _ => Err(ConfigError::new(error.to_string())),
+            },
+        }
     }
 }
 
-/// User-facing configuration validation/parsing failure.
+/// User-facing CLI parsing or validation failure.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ConfigError {
-    MissingRomPath,
-    UnexpectedPositional(String),
-    UnknownOption(String),
-    MissingOptionValue { option: &'static str },
-    DuplicateOption { option: &'static str },
-    InvalidFrames(String),
-    InvalidBootMode(String),
-    InvalidSerialMode(String),
-    NonUtf8Argument,
+pub struct ConfigError {
+    message: String,
+}
+
+impl ConfigError {
+    fn new(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+        }
+    }
 }
 
 impl Display for ConfigError {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        match self {
-            ConfigError::MissingRomPath => {
-                f.write_str("missing required ROM path argument (<ROM_PATH>)")
-            }
-            ConfigError::UnexpectedPositional(value) => {
-                write!(
-                    f,
-                    "unexpected positional argument '{value}'; expected only one <ROM_PATH>"
-                )
-            }
-            ConfigError::UnknownOption(option) => write!(f, "unknown option '{option}'"),
-            ConfigError::MissingOptionValue { option } => {
-                write!(f, "missing value for option '{option}'")
-            }
-            ConfigError::DuplicateOption { option } => {
-                write!(f, "option '{option}' may only be specified once")
-            }
-            ConfigError::InvalidFrames(value) => {
-                write!(
-                    f,
-                    "invalid frame limit '{value}'; expected a positive integer (>= 1)"
-                )
-            }
-            ConfigError::InvalidBootMode(value) => {
-                write!(
-                    f,
-                    "invalid boot mode '{value}'; expected one of: cold, post-bios"
-                )
-            }
-            ConfigError::InvalidSerialMode(value) => {
-                write!(
-                    f,
-                    "invalid serial mode '{value}'; expected one of: off, live, final"
-                )
-            }
-            ConfigError::NonUtf8Argument => {
-                f.write_str("arguments must be valid UTF-8 for this CLI")
-            }
-        }
+        f.write_str(&self.message)
     }
 }
 
 impl Error for ConfigError {}
 
-#[derive(Debug)]
-struct RunConfigParser {
-    args: Vec<OsString>,
-    index: usize,
-    stop_option_parsing: bool,
-
-    rom_path: Option<PathBuf>,
-    frame_limit: Option<NonZeroU64>,
-    boot_mode: BootMode,
-    serial_mode: SerialMode,
-    quiet: bool,
-    trace: bool,
-
-    seen_frames: bool,
-    seen_boot: bool,
-    seen_serial: bool,
+fn build_cli_command() -> Command {
+    Command::new("rgb_cli")
+        .version(env!("CARGO_PKG_VERSION"))
+        .about("Educational Game Boy emulator host runner.")
+        .override_usage("rgb_cli [OPTIONS] <ROM_PATH>")
+        .after_help(
+            "EXAMPLES:
+  rgb_cli ./roms/tetris.gb
+  rgb_cli --boot cold --frames 1800 ./roms/tetris.gb
+  rgb_cli --serial live ./roms/cpu_instrs.gb
+  cargo run -p rgb_cli -- --trace ./roms/tetris.gb",
+        )
+        .arg(
+            Arg::new("rom_path")
+                .value_name("ROM_PATH")
+                .help("Path to a Game Boy ROM file")
+                .value_hint(ValueHint::FilePath)
+                .required(true),
+        )
+        .arg(
+            Arg::new("frames")
+                .long("frames")
+                .value_name("N")
+                .help("Stop after N frames (N >= 1)")
+                .num_args(1)
+                .value_parser(ValueParser::new(parse_frame_limit))
+                .action(ArgAction::Set),
+        )
+        .arg(
+            Arg::new("boot")
+                .long("boot")
+                .value_name("MODE")
+                .help("Boot mode: cold | post-bios")
+                .num_args(1)
+                .value_parser(["cold", "post-bios"])
+                .default_value("post-bios")
+                .action(ArgAction::Set),
+        )
+        .arg(
+            Arg::new("serial")
+                .long("serial")
+                .value_name("MODE")
+                .help("Serial output: off | live | final")
+                .num_args(1)
+                .value_parser(["off", "live", "final"])
+                .default_value("off")
+                .action(ArgAction::Set),
+        )
+        .arg(
+            Arg::new("quiet")
+                .long("quiet")
+                .help("Suppress startup/status logs")
+                .action(ArgAction::SetTrue),
+        )
+        .arg(
+            Arg::new("trace")
+                .long("trace")
+                .help("Enable trace logging (requires trace-enabled build)")
+                .action(ArgAction::SetTrue),
+        )
 }
 
-impl RunConfigParser {
-    fn new(args: Vec<OsString>) -> Self {
-        Self {
-            args,
-            index: 0,
-            stop_option_parsing: false,
-            rom_path: None,
-            frame_limit: None,
-            boot_mode: BootMode::default(),
-            serial_mode: SerialMode::default(),
-            quiet: false,
-            trace: false,
-            seen_frames: false,
-            seen_boot: false,
-            seen_serial: false,
-        }
-    }
+fn run_config_from_matches(matches: clap::ArgMatches) -> Result<RunConfig, ConfigError> {
+    let rom_path = matches
+        .get_one::<String>("rom_path")
+        .map(PathBuf::from)
+        .ok_or_else(|| ConfigError::new("missing required ROM path argument (<ROM_PATH>)"))?;
 
-    fn parse(&mut self) -> Result<RunConfig, ConfigError> {
-        while let Some(current) = self.next_arg()? {
-            if !self.stop_option_parsing && current == "--" {
-                self.stop_option_parsing = true;
-                continue;
-            }
+    let frame_limit = matches
+        .get_one::<u64>("frames")
+        .copied()
+        .and_then(NonZeroU64::new);
 
-            if !self.stop_option_parsing && current.starts_with('-') {
-                self.parse_option(&current)?;
-            } else {
-                self.parse_positional(current)?;
-            }
-        }
+    let boot_mode = matches
+        .get_one::<String>("boot")
+        .and_then(|value| BootMode::from_cli_value(value))
+        .ok_or_else(|| ConfigError::new("invalid boot mode"))?;
 
-        let rom_path = self.rom_path.clone().ok_or(ConfigError::MissingRomPath)?;
+    let serial_mode = matches
+        .get_one::<String>("serial")
+        .and_then(|value| SerialMode::from_cli_value(value))
+        .ok_or_else(|| ConfigError::new("invalid serial mode"))?;
 
-        Ok(RunConfig {
-            rom_path,
-            frame_limit: self.frame_limit,
-            boot_mode: self.boot_mode,
-            serial_mode: self.serial_mode,
-            quiet: self.quiet,
-            trace: self.trace,
-        })
-    }
-
-    fn next_arg(&mut self) -> Result<Option<String>, ConfigError> {
-        if self.index >= self.args.len() {
-            return Ok(None);
-        }
-
-        let value = self.args[self.index]
-            .to_str()
-            .map(str::to_owned)
-            .ok_or(ConfigError::NonUtf8Argument)?;
-        self.index += 1;
-        Ok(Some(value))
-    }
-
-    fn parse_option(&mut self, option: &str) -> Result<(), ConfigError> {
-        match option {
-            "--frames" => {
-                if self.seen_frames {
-                    return Err(ConfigError::DuplicateOption { option: "--frames" });
-                }
-                self.seen_frames = true;
-                let raw = self.next_required_value("--frames")?;
-                self.frame_limit = Some(parse_frame_limit(&raw)?);
-                Ok(())
-            }
-            "--boot" => {
-                if self.seen_boot {
-                    return Err(ConfigError::DuplicateOption { option: "--boot" });
-                }
-                self.seen_boot = true;
-                let raw = self.next_required_value("--boot")?;
-                self.boot_mode = parse_boot_mode(&raw)?;
-                Ok(())
-            }
-            "--serial" => {
-                if self.seen_serial {
-                    return Err(ConfigError::DuplicateOption { option: "--serial" });
-                }
-                self.seen_serial = true;
-                let raw = self.next_required_value("--serial")?;
-                self.serial_mode = parse_serial_mode(&raw)?;
-                Ok(())
-            }
-            "--quiet" => {
-                self.quiet = true;
-                Ok(())
-            }
-            "--trace" => {
-                self.trace = true;
-                Ok(())
-            }
-            _ => Err(ConfigError::UnknownOption(option.to_string())),
-        }
-    }
-
-    fn parse_positional(&mut self, value: String) -> Result<(), ConfigError> {
-        if self.rom_path.is_some() {
-            return Err(ConfigError::UnexpectedPositional(value));
-        }
-
-        self.rom_path = Some(PathBuf::from(value));
-        Ok(())
-    }
-
-    fn next_required_value(&mut self, option: &'static str) -> Result<String, ConfigError> {
-        match self.next_arg()? {
-            Some(value) => Ok(value),
-            None => Err(ConfigError::MissingOptionValue { option }),
-        }
-    }
+    Ok(RunConfig {
+        rom_path,
+        frame_limit,
+        boot_mode,
+        serial_mode,
+        quiet: matches.get_flag("quiet"),
+        trace: matches.get_flag("trace"),
+    })
 }
 
-fn parse_frame_limit(raw: &str) -> Result<NonZeroU64, ConfigError> {
+fn parse_frame_limit(raw: &str) -> Result<u64, String> {
     let value = raw
         .parse::<u64>()
-        .map_err(|_| ConfigError::InvalidFrames(raw.to_string()))?;
+        .map_err(|_| "expected a positive integer".to_string())?;
 
-    NonZeroU64::new(value).ok_or_else(|| ConfigError::InvalidFrames(raw.to_string()))
-}
-
-fn parse_boot_mode(raw: &str) -> Result<BootMode, ConfigError> {
-    match raw {
-        "cold" => Ok(BootMode::Cold),
-        "post-bios" => Ok(BootMode::PostBios),
-        _ => Err(ConfigError::InvalidBootMode(raw.to_string())),
+    if value == 0 {
+        return Err("expected a value >= 1".to_string());
     }
-}
 
-fn parse_serial_mode(raw: &str) -> Result<SerialMode, ConfigError> {
-    match raw {
-        "off" => Ok(SerialMode::Off),
-        "live" => Ok(SerialMode::Live),
-        "final" => Ok(SerialMode::Final),
-        _ => Err(ConfigError::InvalidSerialMode(raw.to_string())),
-    }
+    Ok(value)
 }
 
 #[cfg(test)]
@@ -287,7 +252,7 @@ mod tests {
     use std::num::NonZeroU64;
     use std::path::PathBuf;
 
-    use super::{BootMode, ConfigError, RunConfig, SerialMode};
+    use super::{BootMode, CliRequest, RunConfig, SerialMode};
 
     #[test]
     fn defaults_apply_when_optional_flags_are_absent() {
@@ -319,68 +284,113 @@ mod tests {
     }
 
     #[test]
-    fn parser_honors_double_dash_for_positional_values() {
-        let config =
-            RunConfig::parse_cli_args(["--quiet", "--", "--demo.gb"]).expect("expected success");
-
-        assert_eq!(config.rom_path, PathBuf::from("--demo.gb"));
-    }
-
-    #[test]
     fn parser_rejects_missing_rom_argument() {
-        let error = RunConfig::parse_cli_args(["--quiet"]).expect_err("expected missing ROM error");
-        assert_eq!(error, ConfigError::MissingRomPath);
-    }
-
-    #[test]
-    fn parser_rejects_extra_positional_arguments() {
-        let error =
-            RunConfig::parse_cli_args(["a.gb", "b.gb"]).expect_err("expected positional error");
-        assert_eq!(error, ConfigError::UnexpectedPositional("b.gb".to_string()));
+        let error = RunConfig::parse_cli_args(["--quiet"]).expect_err("expected error");
+        assert!(
+            error
+                .to_string()
+                .contains("the following required arguments were not provided")
+        );
     }
 
     #[test]
     fn parser_rejects_unknown_option() {
         let error = RunConfig::parse_cli_args(["--wat", "rom.gb"]).expect_err("expected error");
-        assert_eq!(error, ConfigError::UnknownOption("--wat".to_string()));
+        assert!(error.to_string().contains("unexpected argument '--wat'"));
+        assert!(error.to_string().contains("to pass '--wat' as a value"));
     }
 
     #[test]
     fn parser_rejects_missing_value_for_frames() {
-        let error = RunConfig::parse_cli_args(["--frames"])
-            .expect_err("expected missing option value for frames");
-        assert_eq!(
-            error,
-            ConfigError::MissingOptionValue { option: "--frames" }
+        let error = RunConfig::parse_cli_args(["--frames"]).expect_err("expected error");
+        assert!(
+            error
+                .to_string()
+                .contains("a value is required for '--frames <N>'")
+        );
+    }
+
+    #[test]
+    fn parser_rejects_missing_value_when_next_token_is_another_option() {
+        let error = RunConfig::parse_cli_args(["--frames", "--boot", "cold", "rom.gb"])
+            .expect_err("expected error");
+        assert!(
+            error
+                .to_string()
+                .contains("a value is required for '--frames <N>'")
         );
     }
 
     #[test]
     fn parser_rejects_duplicate_single_value_options() {
         let error = RunConfig::parse_cli_args(["--boot", "cold", "--boot", "post-bios", "rom.gb"])
-            .expect_err("expected duplicate option");
-        assert_eq!(error, ConfigError::DuplicateOption { option: "--boot" });
+            .expect_err("expected duplicate option error");
+        assert!(
+            error
+                .to_string()
+                .contains("the argument '--boot <MODE>' cannot be used multiple times")
+        );
     }
 
     #[test]
     fn parser_rejects_invalid_frame_limit_values() {
         let zero = RunConfig::parse_cli_args(["--frames", "0", "rom.gb"])
             .expect_err("expected invalid frame value");
-        assert_eq!(zero, ConfigError::InvalidFrames("0".to_string()));
+        assert!(zero.to_string().contains("expected a value >= 1"));
 
         let non_numeric = RunConfig::parse_cli_args(["--frames", "abc", "rom.gb"])
             .expect_err("expected invalid frame value");
-        assert_eq!(non_numeric, ConfigError::InvalidFrames("abc".to_string()));
+        assert!(
+            non_numeric
+                .to_string()
+                .contains("expected a positive integer")
+        );
     }
 
     #[test]
     fn parser_rejects_invalid_boot_and_serial_modes() {
         let boot = RunConfig::parse_cli_args(["--boot", "fast", "rom.gb"])
             .expect_err("expected invalid boot mode");
-        assert_eq!(boot, ConfigError::InvalidBootMode("fast".to_string()));
+        assert!(boot.to_string().contains("invalid value 'fast'"));
 
         let serial = RunConfig::parse_cli_args(["--serial", "stream", "rom.gb"])
             .expect_err("expected invalid serial mode");
-        assert_eq!(serial, ConfigError::InvalidSerialMode("stream".to_string()));
+        assert!(serial.to_string().contains("invalid value 'stream'"));
+    }
+
+    #[test]
+    fn cli_request_parser_recognizes_help_flags() {
+        let long = RunConfig::parse_cli_request(["--help"]).expect("expected help request");
+        let CliRequest::Help(text) = long else {
+            panic!("expected help request");
+        };
+        assert!(text.contains("Usage:"));
+        assert!(text.contains("EXAMPLES:"));
+
+        let short = RunConfig::parse_cli_request(["-h"]).expect("expected help request");
+        assert!(matches!(short, CliRequest::Help(_)));
+    }
+
+    #[test]
+    fn cli_request_parser_recognizes_version_flags() {
+        let long = RunConfig::parse_cli_request(["--version"]).expect("expected version request");
+        let CliRequest::Version(text) = long else {
+            panic!("expected version request");
+        };
+        assert!(text.contains(env!("CARGO_PKG_VERSION")));
+
+        let short = RunConfig::parse_cli_request(["-V"]).expect("expected version request");
+        assert!(matches!(short, CliRequest::Version(_)));
+    }
+
+    #[test]
+    fn cli_request_parser_returns_run_config_for_standard_invocation() {
+        let request = RunConfig::parse_cli_request(["--quiet", "rom.gb"]).expect("expected run");
+        let CliRequest::Run(config) = request else {
+            panic!("expected run request");
+        };
+
+        assert_eq!(config.rom_path, PathBuf::from("rom.gb"));
+        assert!(config.quiet);
     }
 }

@@ -1,12 +1,12 @@
 use std::ffi::OsString;
 
-use crate::config::RunConfig;
+use crate::config::{CliRequest, RunConfig};
 use crate::error::CliError;
 
 /// Thin application object that owns the process arguments.
 ///
-/// Milestone 1 Step 2 intentionally keeps runtime behavior minimal while
-/// establishing a testable, library-driven execution path.
+/// The binary entrypoint calls into this type so the CLI behavior can be
+/// tested directly without subprocess orchestration.
 #[derive(Debug, Clone)]
 pub(crate) struct App {
     raw_args: Vec<OsString>,
@@ -25,11 +25,21 @@ impl App {
 
     pub(crate) fn run(self) -> Result<(), CliError> {
         self.ensure_program_name_is_present()?;
-        let _config = self.parse_run_config()?;
-
-        // Runtime orchestration is implemented in later Milestone 1 steps.
-        // This step is focused on producing a validated typed configuration.
-        Ok(())
+        match self.parse_cli_request()? {
+            CliRequest::Help(output) => {
+                print!("{output}");
+                Ok(())
+            }
+            CliRequest::Version(output) => {
+                print!("{output}");
+                Ok(())
+            }
+            CliRequest::Run(_config) => {
+                // Runtime orchestration is implemented in later Milestone 1
+                // steps. By this point, arguments are fully validated and typed.
+                Ok(())
+            }
+        }
     }
 
     fn ensure_program_name_is_present(&self) -> Result<(), CliError> {
@@ -42,7 +52,13 @@ impl App {
         Ok(())
     }
 
-    fn parse_run_config(&self) -> Result<RunConfig, CliError> {
+    fn parse_cli_request(&self) -> Result<CliRequest, CliError> {
+        let user_args = self.raw_args.iter().skip(1).cloned();
+        RunConfig::parse_cli_request(user_args).map_err(|error| CliError::usage(error.to_string()))
+    }
+
+    #[cfg(test)]
+    fn parse_run_config_for_test(&self) -> Result<RunConfig, CliError> {
         let user_args = self.raw_args.iter().skip(1).cloned();
         RunConfig::parse_cli_args(user_args).map_err(|error| CliError::usage(error.to_string()))
     }
@@ -51,6 +67,7 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::App;
+    use crate::config::{BootMode, CliRequest, SerialMode};
     use crate::error::CliErrorKind;
 
     #[test]
@@ -75,5 +92,61 @@ mod tests {
     fn app_accepts_standard_process_argument_vector_with_rom() {
         let result = App::from_args(["rgb_cli", "rom.gb"]);
         assert!(result.run().is_ok());
+    }
+
+    #[test]
+    fn app_accepts_help_and_version_requests() {
+        assert!(App::from_args(["rgb_cli", "--help"]).run().is_ok());
+        assert!(App::from_args(["rgb_cli", "-h"]).run().is_ok());
+        assert!(App::from_args(["rgb_cli", "--version"]).run().is_ok());
+        assert!(App::from_args(["rgb_cli", "-V"]).run().is_ok());
+    }
+
+    #[test]
+    fn app_returns_actionable_clap_errors_for_invalid_invocation() {
+        let app = App::from_args(["rgb_cli", "--unknown", "rom.gb"]);
+        let error = app
+            .parse_cli_request()
+            .expect_err("expected parsing to fail");
+
+        assert_eq!(error.kind(), CliErrorKind::Usage);
+        assert!(
+            error
+                .to_string()
+                .contains("unexpected argument '--unknown'")
+        );
+        assert!(error.to_string().contains("For more information"));
+    }
+
+    #[test]
+    fn app_exposes_typed_run_config_for_valid_invocation() {
+        let app = App::from_args([
+            "rgb_cli", "--boot", "cold", "--serial", "final", "--quiet", "rom.gb",
+        ]);
+        let config = app
+            .parse_run_config_for_test()
+            .expect("expected run config for valid invocation");
+
+        assert_eq!(config.boot_mode, BootMode::Cold);
+        assert_eq!(config.serial_mode, SerialMode::Final);
+        assert!(config.quiet);
+    }
+
+    #[test]
+    fn app_parse_cli_request_returns_help_version_and_run_commands() {
+        let help = App::from_args(["rgb_cli", "-h"])
+            .parse_cli_request()
+            .expect("expected help request");
+        assert!(matches!(help, CliRequest::Help(_)));
+
+        let version = App::from_args(["rgb_cli", "-V"])
+            .parse_cli_request()
+            .expect("expected version request");
+        assert!(matches!(version, CliRequest::Version(_)));
+
+        let run = App::from_args(["rgb_cli", "rom.gb"])
+            .parse_cli_request()
+            .expect("expected run request");
+        assert!(matches!(run, CliRequest::Run(_)));
     }
 }
