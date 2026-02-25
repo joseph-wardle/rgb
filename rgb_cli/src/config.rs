@@ -15,6 +15,19 @@ use clap::builder::ValueParser;
 use clap::error::ErrorKind;
 use clap::{Arg, ArgAction, Command, ValueHint};
 
+const CLI_PROGRAM_NAME: &str = "rgb_cli";
+const ARG_ROM_PATH: &str = "rom_path";
+const ARG_FRAMES: &str = "frames";
+const ARG_BOOT: &str = "boot";
+const ARG_SERIAL: &str = "serial";
+const ARG_QUIET: &str = "quiet";
+const ARG_TRACE: &str = "trace";
+const BOOT_MODE_COLD: &str = "cold";
+const BOOT_MODE_POST_BIOS: &str = "post-bios";
+const SERIAL_MODE_OFF: &str = "off";
+const SERIAL_MODE_LIVE: &str = "live";
+const SERIAL_MODE_FINAL: &str = "final";
+
 /// Selects the CPU/boot initialization path used to construct `DMG`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum BootMode {
@@ -26,8 +39,8 @@ pub enum BootMode {
 impl BootMode {
     fn from_cli_value(value: &str) -> Option<Self> {
         match value {
-            "cold" => Some(BootMode::Cold),
-            "post-bios" => Some(BootMode::PostBios),
+            BOOT_MODE_COLD => Some(BootMode::Cold),
+            BOOT_MODE_POST_BIOS => Some(BootMode::PostBios),
             _ => None,
         }
     }
@@ -36,8 +49,8 @@ impl BootMode {
 impl Display for BootMode {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
-            BootMode::Cold => f.write_str("cold"),
-            BootMode::PostBios => f.write_str("post-bios"),
+            BootMode::Cold => f.write_str(BOOT_MODE_COLD),
+            BootMode::PostBios => f.write_str(BOOT_MODE_POST_BIOS),
         }
     }
 }
@@ -54,9 +67,9 @@ pub enum SerialMode {
 impl SerialMode {
     fn from_cli_value(value: &str) -> Option<Self> {
         match value {
-            "off" => Some(SerialMode::Off),
-            "live" => Some(SerialMode::Live),
-            "final" => Some(SerialMode::Final),
+            SERIAL_MODE_OFF => Some(SerialMode::Off),
+            SERIAL_MODE_LIVE => Some(SerialMode::Live),
+            SERIAL_MODE_FINAL => Some(SerialMode::Final),
             _ => None,
         }
     }
@@ -65,9 +78,9 @@ impl SerialMode {
 impl Display for SerialMode {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
-            SerialMode::Off => f.write_str("off"),
-            SerialMode::Live => f.write_str("live"),
-            SerialMode::Final => f.write_str("final"),
+            SerialMode::Off => f.write_str(SERIAL_MODE_OFF),
+            SerialMode::Live => f.write_str(SERIAL_MODE_LIVE),
+            SerialMode::Final => f.write_str(SERIAL_MODE_FINAL),
         }
     }
 }
@@ -93,6 +106,11 @@ pub enum CliRequest {
 
 impl RunConfig {
     /// Parses CLI arguments (excluding argv[0]) into a validated run configuration.
+    ///
+    /// # Errors
+    ///
+    /// Returns `ConfigError` when parsing fails, when values are invalid, or
+    /// when the invocation requests help/version output instead of a run.
     pub fn parse_cli_args<I, S>(args: I) -> Result<Self, ConfigError>
     where
         I: IntoIterator<Item = S>,
@@ -100,24 +118,28 @@ impl RunConfig {
     {
         match Self::parse_cli_request(args)? {
             CliRequest::Run(config) => Ok(config),
-            CliRequest::Help(text) => Err(ConfigError::new(text)),
-            CliRequest::Version(text) => Err(ConfigError::new(text)),
+            CliRequest::Help(text) | CliRequest::Version(text) => Err(ConfigError::new(text)),
         }
     }
 
     /// Parses CLI arguments (excluding argv[0]) into a high-level request.
+    ///
+    /// # Errors
+    ///
+    /// Returns `ConfigError` for invalid flags, missing values, malformed
+    /// option payloads, or any other clap parse failure.
     pub fn parse_cli_request<I, S>(args: I) -> Result<CliRequest, ConfigError>
     where
         I: IntoIterator<Item = S>,
         S: Into<OsString>,
     {
-        let argv = std::iter::once(OsString::from("rgb_cli"))
+        let cli_argv = std::iter::once(OsString::from(CLI_PROGRAM_NAME))
             .chain(args.into_iter().map(Into::into))
             .collect::<Vec<_>>();
 
         let mut command = build_cli_command();
-        match command.try_get_matches_from_mut(argv) {
-            Ok(matches) => Ok(CliRequest::Run(run_config_from_matches(matches)?)),
+        match command.try_get_matches_from_mut(cli_argv) {
+            Ok(matches) => Ok(CliRequest::Run(run_config_from_matches(&matches)?)),
             Err(error) => match error.kind() {
                 ErrorKind::DisplayHelp => Ok(CliRequest::Help(error.to_string())),
                 ErrorKind::DisplayVersion => Ok(CliRequest::Version(error.to_string())),
@@ -150,7 +172,7 @@ impl Display for ConfigError {
 impl Error for ConfigError {}
 
 fn build_cli_command() -> Command {
-    Command::new("rgb_cli")
+    Command::new(CLI_PROGRAM_NAME)
         .version(env!("CARGO_PKG_VERSION"))
         .about("Educational Game Boy emulator host runner.")
         .override_usage("rgb_cli [OPTIONS] <ROM_PATH>")
@@ -162,14 +184,14 @@ fn build_cli_command() -> Command {
   cargo run -p rgb_cli -- --trace ./roms/tetris.gb",
         )
         .arg(
-            Arg::new("rom_path")
+            Arg::new(ARG_ROM_PATH)
                 .value_name("ROM_PATH")
                 .help("Path to a Game Boy ROM file")
                 .value_hint(ValueHint::FilePath)
                 .required(true),
         )
         .arg(
-            Arg::new("frames")
+            Arg::new(ARG_FRAMES)
                 .long("frames")
                 .value_name("N")
                 .help("Stop after N frames (N >= 1)")
@@ -178,57 +200,57 @@ fn build_cli_command() -> Command {
                 .action(ArgAction::Set),
         )
         .arg(
-            Arg::new("boot")
+            Arg::new(ARG_BOOT)
                 .long("boot")
                 .value_name("MODE")
                 .help("Boot mode: cold | post-bios")
                 .num_args(1)
-                .value_parser(["cold", "post-bios"])
-                .default_value("post-bios")
+                .value_parser([BOOT_MODE_COLD, BOOT_MODE_POST_BIOS])
+                .default_value(BOOT_MODE_POST_BIOS)
                 .action(ArgAction::Set),
         )
         .arg(
-            Arg::new("serial")
+            Arg::new(ARG_SERIAL)
                 .long("serial")
                 .value_name("MODE")
                 .help("Serial output: off | live | final")
                 .num_args(1)
-                .value_parser(["off", "live", "final"])
-                .default_value("off")
+                .value_parser([SERIAL_MODE_OFF, SERIAL_MODE_LIVE, SERIAL_MODE_FINAL])
+                .default_value(SERIAL_MODE_OFF)
                 .action(ArgAction::Set),
         )
         .arg(
-            Arg::new("quiet")
+            Arg::new(ARG_QUIET)
                 .long("quiet")
                 .help("Suppress startup/status logs")
                 .action(ArgAction::SetTrue),
         )
         .arg(
-            Arg::new("trace")
+            Arg::new(ARG_TRACE)
                 .long("trace")
                 .help("Enable trace logging (requires trace-enabled build)")
                 .action(ArgAction::SetTrue),
         )
 }
 
-fn run_config_from_matches(matches: clap::ArgMatches) -> Result<RunConfig, ConfigError> {
+fn run_config_from_matches(matches: &clap::ArgMatches) -> Result<RunConfig, ConfigError> {
     let rom_path = matches
-        .get_one::<String>("rom_path")
+        .get_one::<String>(ARG_ROM_PATH)
         .map(PathBuf::from)
         .ok_or_else(|| ConfigError::new("missing required ROM path argument (<ROM_PATH>)"))?;
 
     let frame_limit = matches
-        .get_one::<u64>("frames")
+        .get_one::<u64>(ARG_FRAMES)
         .copied()
         .and_then(NonZeroU64::new);
 
     let boot_mode = matches
-        .get_one::<String>("boot")
+        .get_one::<String>(ARG_BOOT)
         .and_then(|value| BootMode::from_cli_value(value))
         .ok_or_else(|| ConfigError::new("invalid boot mode"))?;
 
     let serial_mode = matches
-        .get_one::<String>("serial")
+        .get_one::<String>(ARG_SERIAL)
         .and_then(|value| SerialMode::from_cli_value(value))
         .ok_or_else(|| ConfigError::new("invalid serial mode"))?;
 
@@ -237,8 +259,8 @@ fn run_config_from_matches(matches: clap::ArgMatches) -> Result<RunConfig, Confi
         frame_limit,
         boot_mode,
         serial_mode,
-        quiet: matches.get_flag("quiet"),
-        trace: matches.get_flag("trace"),
+        quiet: matches.get_flag(ARG_QUIET),
+        trace: matches.get_flag(ARG_TRACE),
     })
 }
 

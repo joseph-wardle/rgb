@@ -78,6 +78,7 @@ impl SerialVerdictCondition {
 }
 
 impl StopReason {
+    #[must_use]
     pub fn summary_label(&self) -> String {
         match self {
             StopReason::FrameLimitReached { frame_limit } => {
@@ -116,8 +117,7 @@ impl ProgressReporter {
     fn from_config(config: &RunConfig) -> Self {
         let long_enough = config
             .frame_limit
-            .map(|limit| limit.get() >= PROGRESS_MIN_FRAME_LIMIT_FOR_PROGRESS)
-            .unwrap_or(true);
+            .is_none_or(|limit| limit.get() >= PROGRESS_MIN_FRAME_LIMIT_FOR_PROGRESS);
         let headless = config.serial_mode == SerialMode::Off;
         let enabled = !config.quiet && headless && long_enough;
 
@@ -244,6 +244,7 @@ pub struct Runner {
 }
 
 impl Runner {
+    #[must_use]
     pub fn new(config: RunConfig, gameboy: DMG) -> Self {
         let exit_conditions = ExitConditions::from_config(&config);
         let progress_reporter = ProgressReporter::from_config(&config);
@@ -258,6 +259,7 @@ impl Runner {
     }
 
     /// Enables serial verdict based early termination.
+    #[must_use]
     pub fn with_serial_verdict_condition(mut self, condition: SerialVerdictCondition) -> Self {
         self.exit_conditions.serial_verdict = Some(condition);
         self
@@ -267,6 +269,10 @@ impl Runner {
     ///
     /// When no stop condition is configured, this function intentionally runs
     /// forever and relies on host process termination (e.g. Ctrl-C).
+    ///
+    /// # Errors
+    ///
+    /// Returns `CliError` if writing serial/progress output to stdout fails.
     pub fn run(&mut self) -> Result<RunReport, CliError> {
         loop {
             self.step_one_frame()?;

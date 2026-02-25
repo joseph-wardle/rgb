@@ -39,11 +39,7 @@ impl App {
     pub(crate) fn run(self) -> Result<(), CliError> {
         self.ensure_program_name_is_present()?;
         match self.parse_cli_request()? {
-            CliRequest::Help(output) => {
-                print!("{output}");
-                Ok(())
-            }
-            CliRequest::Version(output) => {
+            CliRequest::Help(output) | CliRequest::Version(output) => {
                 print!("{output}");
                 Ok(())
             }
@@ -116,9 +112,7 @@ impl App {
 }
 
 fn frame_limit_label(frame_limit: Option<NonZeroU64>) -> String {
-    frame_limit
-        .map(|value| value.get().to_string())
-        .unwrap_or_else(|| "unbounded".to_string())
+    frame_limit.map_or_else(|| "unbounded".to_string(), |value| value.get().to_string())
 }
 
 fn bool_label(enabled: bool) -> &'static str {

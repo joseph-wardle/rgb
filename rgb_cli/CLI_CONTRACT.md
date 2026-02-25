@@ -83,19 +83,22 @@ rgb_cli [OPTIONS] <ROM_PATH>
 - `2`: CLI usage/validation failure.
 
 ## Output Contract
-- Normal mode prints a concise startup summary:
-  - ROM path
-  - cartridge title/mapper
+- Normal mode prints a concise startup block:
+  - `Run Start`
+  - ROM path + cartridge title/mapper
   - boot mode
-  - frame limit (or "unbounded")
-  - serial mode
-  - trace mode
-- `--quiet` suppresses this summary.
-- Error messages are single-purpose and actionable.
+  - limits summary (frames, serial mode, trace mode)
+- Long headless runs may print periodic progress lines (`progress: frame ...`) to show forward motion.
+- Normal mode prints a concise shutdown block on explicit stop:
+  - `Run Complete`
+  - frames executed
+  - stop reason
+  - serial byte count
+- `--quiet` suppresses startup/progress/shutdown status output.
+- Error messages remain single-purpose and actionable.
 
 ## Non-Goals for M1
 - No interactive key mapping UI yet.
 - No graphics window integration requirement in this contract.
 - No audio output requirement in this contract.
 - No debugger command shell in this contract.
-

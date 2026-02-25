@@ -27,6 +27,11 @@ pub use rom::{LoadedRom, RomMetadata, load_rom};
 pub use runner::{RunReport, Runner, SerialVerdict, SerialVerdictCondition, StopReason};
 
 /// Runs the CLI application using the current process argument vector.
+///
+/// # Errors
+///
+/// Returns `CliError` when invocation parsing fails or runtime setup/execution
+/// encounters an error.
 pub fn run() -> Result<(), CliError> {
     run_with_args(std::env::args_os())
 }
@@ -34,6 +39,11 @@ pub fn run() -> Result<(), CliError> {
 /// Runs the CLI application using an explicit argument iterator.
 ///
 /// This function is the preferred entrypoint for tests.
+///
+/// # Errors
+///
+/// Returns `CliError` when invocation parsing fails or runtime setup/execution
+/// encounters an error.
 pub fn run_with_args<I, S>(args: I) -> Result<(), CliError>
 where
     I: IntoIterator<Item = S>,

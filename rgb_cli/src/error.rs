@@ -22,6 +22,7 @@ pub enum CliExitCode {
 }
 
 impl CliExitCode {
+    #[must_use]
     pub const fn as_i32(self) -> i32 {
         self as i32
     }
@@ -90,6 +91,7 @@ impl CliError {
         Self::RuntimeSetup(message.into())
     }
 
+    #[must_use]
     pub const fn kind(&self) -> CliErrorKind {
         match self {
             CliError::Args(_) => CliErrorKind::Usage,
@@ -100,6 +102,7 @@ impl CliError {
         }
     }
 
+    #[must_use]
     pub const fn exit_code(&self) -> i32 {
         match self.kind() {
             CliErrorKind::Usage => CliExitCode::UsageFailure.as_i32(),

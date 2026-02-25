@@ -27,10 +27,12 @@ pub struct RomMetadata {
 }
 
 impl RomMetadata {
+    #[must_use]
     pub fn mapper_label(&self) -> &'static str {
         mapper_label(self.mapper)
     }
 
+    #[must_use]
     pub fn display_title(&self) -> &str {
         if self.title.is_empty() {
             "<untitled>"
@@ -52,18 +54,22 @@ pub struct LoadedRom {
 }
 
 impl LoadedRom {
+    #[must_use]
     pub fn path(&self) -> &Path {
         &self.path
     }
 
+    #[must_use]
     pub fn metadata(&self) -> &RomMetadata {
         &self.metadata
     }
 
+    #[must_use]
     pub fn cartridge(&self) -> &CartridgeKind {
         &self.cartridge
     }
 
+    #[must_use]
     pub fn into_cartridge(self) -> CartridgeKind {
         self.cartridge
     }
@@ -73,6 +79,11 @@ impl LoadedRom {
 ///
 /// IO and cartridge-parse failures are converted into `CliError` variants so
 /// the CLI boundary can print precise, user-facing diagnostics.
+///
+/// # Errors
+///
+/// Returns `CliError::Io` if the file cannot be read and `CliError::RomParse`
+/// if header/mapper parsing fails.
 pub fn load_rom(path: impl AsRef<Path>) -> Result<LoadedRom, CliError> {
     let path = path.as_ref();
     let bytes = fs::read(path).map_err(|source| CliError::io("reading ROM", path, source))?;

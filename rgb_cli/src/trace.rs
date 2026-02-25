@@ -46,6 +46,11 @@ impl TraceSession {
 /// - `trace_requested = true` with `trace` feature: attach a thread-local
 ///   subscriber for the current run
 /// - `trace_requested = true` without `trace` feature: return actionable error
+///
+/// # Errors
+///
+/// Returns `CliError::TraceFeatureRequired` when `trace_requested` is true but
+/// the binary was built without the `trace` feature.
 pub fn setup_trace(trace_requested: bool) -> Result<TraceSession, CliError> {
     if !trace_requested {
         return Ok(TraceSession::disabled());
