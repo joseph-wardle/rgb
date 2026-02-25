@@ -2,6 +2,7 @@ use std::ffi::OsString;
 use std::num::NonZeroU64;
 
 use crate::config::{CliRequest, RunConfig};
+use crate::emulator::construct_gameboy;
 use crate::error::CliError;
 use crate::rom::{LoadedRom, load_rom};
 
@@ -42,8 +43,10 @@ impl App {
                 if let Some(summary) = Self::build_startup_summary(&config, &loaded_rom) {
                     println!("{summary}");
                 }
+                let _gameboy = construct_gameboy(config.boot_mode, loaded_rom);
                 // Runtime orchestration is implemented in later Milestone 1
-                // steps. By this point, arguments are fully validated and typed.
+                // steps. By this point, arguments are fully validated, ROM data
+                // is parsed, and hardware state is constructed.
                 Ok(())
             }
         }

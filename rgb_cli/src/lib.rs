@@ -6,6 +6,7 @@
 
 mod app;
 mod config;
+mod emulator;
 mod error;
 mod rom;
 
