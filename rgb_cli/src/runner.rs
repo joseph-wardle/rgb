@@ -73,6 +73,88 @@ impl ExitConditions {
     }
 }
 
+const LIVE_SERIAL_PARTIAL_FLUSH_INTERVAL_FRAMES: u64 = 30;
+const LIVE_SERIAL_PARTIAL_FLUSH_BYTE_THRESHOLD: usize = 120;
+
+/// Incremental serial-output formatter used by `--serial live`.
+///
+/// Incoming bytes are buffered until a complete line (`\n`) is available.
+/// If no newline arrives, a partial line is flushed after a small frame delay
+/// (or once enough bytes accumulate) so output remains readable but responsive.
+#[derive(Debug, Default)]
+struct LiveSerialPassthrough {
+    cursor: usize,
+    pending_line: Vec<u8>,
+    frames_since_emit: u64,
+}
+
+impl LiveSerialPassthrough {
+    fn collect_lines(&mut self, serial_buffer: &[u8]) -> Vec<Vec<u8>> {
+        self.collect_new_bytes(serial_buffer);
+
+        let mut emitted = self.drain_complete_lines();
+        if emitted.is_empty() {
+            self.frames_since_emit = self.frames_since_emit.saturating_add(1);
+            if self.should_flush_partial_line() {
+                emitted.push(self.flush_partial_line());
+                self.frames_since_emit = 0;
+            }
+        } else {
+            self.frames_since_emit = 0;
+        }
+
+        emitted
+    }
+
+    fn finalize(&mut self) -> Option<Vec<u8>> {
+        if self.pending_line.is_empty() {
+            return None;
+        }
+
+        self.frames_since_emit = 0;
+        Some(self.flush_partial_line())
+    }
+
+    fn collect_new_bytes(&mut self, serial_buffer: &[u8]) {
+        // Defensive recovery in case a future core change clears the serial
+        // buffer mid-run.
+        if serial_buffer.len() < self.cursor {
+            self.cursor = 0;
+            self.pending_line.clear();
+        }
+
+        if serial_buffer.len() > self.cursor {
+            self.pending_line
+                .extend_from_slice(&serial_buffer[self.cursor..]);
+            self.cursor = serial_buffer.len();
+        }
+    }
+
+    fn drain_complete_lines(&mut self) -> Vec<Vec<u8>> {
+        let mut lines = Vec::new();
+        while let Some(newline_index) = self.pending_line.iter().position(|&byte| byte == b'\n') {
+            let line = self
+                .pending_line
+                .drain(..=newline_index)
+                .collect::<Vec<_>>();
+            lines.push(line);
+        }
+        lines
+    }
+
+    fn should_flush_partial_line(&self) -> bool {
+        !self.pending_line.is_empty()
+            && (self.pending_line.len() >= LIVE_SERIAL_PARTIAL_FLUSH_BYTE_THRESHOLD
+                || self.frames_since_emit >= LIVE_SERIAL_PARTIAL_FLUSH_INTERVAL_FRAMES)
+    }
+
+    fn flush_partial_line(&mut self) -> Vec<u8> {
+        let mut line = std::mem::take(&mut self.pending_line);
+        line.push(b'\n');
+        line
+    }
+}
+
 /// Deterministic frame-by-frame execution driver for `DMG`.
 ///
 /// The runner owns both host config and emulator state. Exit behavior is
@@ -85,7 +167,7 @@ pub struct Runner {
     gameboy: DMG,
     exit_conditions: ExitConditions,
     frames_executed: u64,
-    live_serial_cursor: usize,
+    live_serial_passthrough: LiveSerialPassthrough,
 }
 
 impl Runner {
@@ -96,7 +178,7 @@ impl Runner {
             gameboy,
             exit_conditions,
             frames_executed: 0,
-            live_serial_cursor: 0,
+            live_serial_passthrough: LiveSerialPassthrough::default(),
         }
     }
 
@@ -115,6 +197,7 @@ impl Runner {
             self.step_one_frame()?;
 
             if let Some(stop_reason) = self.evaluate_exit_conditions() {
+                self.emit_live_serial_tail_if_enabled()?;
                 self.emit_final_serial_output_if_enabled()?;
                 return Ok(self.build_report(stop_reason));
             }
@@ -154,19 +237,23 @@ impl Runner {
             return Ok(());
         }
 
-        let (delta, next_cursor) = {
-            let serial_buffer = self.gameboy.serial().output_bytes();
-            if serial_buffer.len() <= self.live_serial_cursor {
-                return Ok(());
-            }
-            (
-                serial_buffer[self.live_serial_cursor..].to_vec(),
-                serial_buffer.len(),
-            )
-        };
+        let lines = self
+            .live_serial_passthrough
+            .collect_lines(self.gameboy.serial().output_bytes());
+        for line in lines {
+            Self::write_stdout_bytes(&line)?;
+        }
+        Ok(())
+    }
 
-        Self::write_stdout_bytes(&delta)?;
-        self.live_serial_cursor = next_cursor;
+    fn emit_live_serial_tail_if_enabled(&mut self) -> Result<(), CliError> {
+        if self.config.serial_mode != SerialMode::Live {
+            return Ok(());
+        }
+
+        if let Some(partial_line) = self.live_serial_passthrough.finalize() {
+            Self::write_stdout_bytes(&partial_line)?;
+        }
         Ok(())
     }
 
@@ -204,7 +291,10 @@ mod tests {
 
     use tempfile::NamedTempFile;
 
-    use super::{ExitConditions, Runner, SerialVerdict, SerialVerdictCondition, StopReason};
+    use super::{
+        ExitConditions, LIVE_SERIAL_PARTIAL_FLUSH_INTERVAL_FRAMES, LiveSerialPassthrough, Runner,
+        SerialVerdict, SerialVerdictCondition, StopReason,
+    };
     use crate::config::{BootMode, RunConfig, SerialMode};
     use crate::emulator::construct_gameboy;
     use crate::rom::load_rom;
@@ -239,6 +329,46 @@ mod tests {
             Some(SerialVerdict::Failed)
         );
         assert_eq!(condition.evaluate("still running"), None);
+    }
+
+    #[test]
+    fn live_passthrough_emits_only_new_complete_lines() {
+        let mut passthrough = LiveSerialPassthrough::default();
+
+        let first = passthrough.collect_lines(b"line one\nline");
+        assert_eq!(first, vec![b"line one\n".to_vec()]);
+
+        let second = passthrough.collect_lines(b"line one\nline two\n");
+        assert_eq!(second, vec![b"line two\n".to_vec()]);
+
+        let third = passthrough.collect_lines(b"line one\nline two\n");
+        assert!(third.is_empty());
+    }
+
+    #[test]
+    fn live_passthrough_flushes_partial_lines_after_throttle_interval() {
+        let mut passthrough = LiveSerialPassthrough::default();
+
+        assert!(passthrough.collect_lines(b"partial").is_empty());
+
+        for _ in 0..=LIVE_SERIAL_PARTIAL_FLUSH_INTERVAL_FRAMES {
+            let emitted = passthrough.collect_lines(b"partial");
+            if !emitted.is_empty() {
+                assert_eq!(emitted, vec![b"partial\n".to_vec()]);
+                return;
+            }
+        }
+
+        panic!("expected throttled partial-line flush");
+    }
+
+    #[test]
+    fn live_passthrough_finalize_flushes_pending_partial_line() {
+        let mut passthrough = LiveSerialPassthrough::default();
+
+        assert!(passthrough.collect_lines(b"tail").is_empty());
+        assert_eq!(passthrough.finalize(), Some(b"tail\n".to_vec()));
+        assert_eq!(passthrough.finalize(), None);
     }
 
     #[test]
