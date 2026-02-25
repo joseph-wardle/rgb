@@ -7,6 +7,9 @@ use rgb_core::gameboy::DMG;
 use crate::config::{RunConfig, SerialMode};
 use crate::error::CliError;
 
+const PROGRESS_REPORT_INTERVAL_FRAMES: u64 = 600;
+const PROGRESS_MIN_FRAME_LIMIT_FOR_PROGRESS: u64 = PROGRESS_REPORT_INTERVAL_FRAMES * 2;
+
 /// One-shot execution report emitted when the runner exits via an explicit
 /// stop condition.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -35,6 +38,15 @@ pub enum SerialVerdict {
     Failed,
 }
 
+impl SerialVerdict {
+    fn label(self) -> &'static str {
+        match self {
+            SerialVerdict::Passed => "passed",
+            SerialVerdict::Failed => "failed",
+        }
+    }
+}
+
 /// Optional serial-output predicate that can terminate the run loop.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SerialVerdictCondition {
@@ -58,6 +70,20 @@ impl SerialVerdictCondition {
     }
 }
 
+impl StopReason {
+    pub fn summary_label(&self) -> String {
+        match self {
+            StopReason::FrameLimitReached { frame_limit } => {
+                format!("frame limit reached ({frame_limit})")
+            }
+            StopReason::SerialVerdictReached {
+                condition: SerialVerdictCondition::BlarggPassFail,
+                verdict,
+            } => format!("serial verdict ({})", verdict.label()),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 struct ExitConditions {
     frame_limit: Option<NonZeroU64>,
@@ -69,6 +95,45 @@ impl ExitConditions {
         Self {
             frame_limit: config.frame_limit,
             serial_verdict: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+struct ProgressReporter {
+    next_report_frame: u64,
+    enabled: bool,
+}
+
+impl ProgressReporter {
+    fn from_config(config: &RunConfig) -> Self {
+        let long_enough = config
+            .frame_limit
+            .map(|limit| limit.get() >= PROGRESS_MIN_FRAME_LIMIT_FOR_PROGRESS)
+            .unwrap_or(true);
+        let headless = config.serial_mode == SerialMode::Off;
+        let enabled = !config.quiet && headless && long_enough;
+
+        Self {
+            next_report_frame: PROGRESS_REPORT_INTERVAL_FRAMES,
+            enabled,
+        }
+    }
+
+    fn should_emit(&self, frames_executed: u64) -> bool {
+        self.enabled && frames_executed >= self.next_report_frame
+    }
+
+    fn mark_emitted(&mut self) {
+        self.next_report_frame = self
+            .next_report_frame
+            .saturating_add(PROGRESS_REPORT_INTERVAL_FRAMES);
+    }
+
+    fn format_line(frames_executed: u64, frame_limit: Option<NonZeroU64>) -> String {
+        match frame_limit {
+            Some(limit) => format!("progress: frame {frames_executed}/{}", limit.get()),
+            None => format!("progress: frame {frames_executed}"),
         }
     }
 }
@@ -166,6 +231,7 @@ pub struct Runner {
     config: RunConfig,
     gameboy: DMG,
     exit_conditions: ExitConditions,
+    progress_reporter: ProgressReporter,
     frames_executed: u64,
     live_serial_passthrough: LiveSerialPassthrough,
 }
@@ -173,10 +239,12 @@ pub struct Runner {
 impl Runner {
     pub fn new(config: RunConfig, gameboy: DMG) -> Self {
         let exit_conditions = ExitConditions::from_config(&config);
+        let progress_reporter = ProgressReporter::from_config(&config);
         Self {
             config,
             gameboy,
             exit_conditions,
+            progress_reporter,
             frames_executed: 0,
             live_serial_passthrough: LiveSerialPassthrough::default(),
         }
@@ -195,6 +263,7 @@ impl Runner {
     pub fn run(&mut self) -> Result<RunReport, CliError> {
         loop {
             self.step_one_frame()?;
+            self.emit_progress_line_if_enabled()?;
 
             if let Some(stop_reason) = self.evaluate_exit_conditions() {
                 self.emit_live_serial_tail_if_enabled()?;
@@ -246,6 +315,17 @@ impl Runner {
         Ok(())
     }
 
+    fn emit_progress_line_if_enabled(&mut self) -> Result<(), CliError> {
+        if !self.progress_reporter.should_emit(self.frames_executed) {
+            return Ok(());
+        }
+
+        let line = ProgressReporter::format_line(self.frames_executed, self.config.frame_limit);
+        Self::write_stdout_line(&line)?;
+        self.progress_reporter.mark_emitted();
+        Ok(())
+    }
+
     fn emit_live_serial_tail_if_enabled(&mut self) -> Result<(), CliError> {
         if self.config.serial_mode != SerialMode::Live {
             return Ok(());
@@ -281,6 +361,12 @@ impl Runner {
             .flush()
             .map_err(|source| CliError::io("flushing serial output", STDOUT_PATH, source))
     }
+
+    fn write_stdout_line(line: &str) -> Result<(), CliError> {
+        let mut bytes = line.as_bytes().to_vec();
+        bytes.push(b'\n');
+        Self::write_stdout_bytes(&bytes)
+    }
 }
 
 #[cfg(test)]
@@ -292,8 +378,9 @@ mod tests {
     use tempfile::NamedTempFile;
 
     use super::{
-        ExitConditions, LIVE_SERIAL_PARTIAL_FLUSH_INTERVAL_FRAMES, LiveSerialPassthrough, Runner,
-        SerialVerdict, SerialVerdictCondition, StopReason,
+        ExitConditions, LIVE_SERIAL_PARTIAL_FLUSH_INTERVAL_FRAMES, LiveSerialPassthrough,
+        PROGRESS_MIN_FRAME_LIMIT_FOR_PROGRESS, ProgressReporter, Runner, SerialVerdict,
+        SerialVerdictCondition, StopReason,
     };
     use crate::config::{BootMode, RunConfig, SerialMode};
     use crate::emulator::construct_gameboy;
@@ -329,6 +416,65 @@ mod tests {
             Some(SerialVerdict::Failed)
         );
         assert_eq!(condition.evaluate("still running"), None);
+    }
+
+    #[test]
+    fn stop_reason_summary_is_human_friendly() {
+        let frame_limit = NonZeroU64::new(1200).expect("non-zero");
+        let limit_reason = StopReason::FrameLimitReached { frame_limit };
+        assert_eq!(limit_reason.summary_label(), "frame limit reached (1200)");
+
+        let pass_reason = StopReason::SerialVerdictReached {
+            condition: SerialVerdictCondition::BlarggPassFail,
+            verdict: SerialVerdict::Passed,
+        };
+        assert_eq!(pass_reason.summary_label(), "serial verdict (passed)");
+
+        let fail_reason = StopReason::SerialVerdictReached {
+            condition: SerialVerdictCondition::BlarggPassFail,
+            verdict: SerialVerdict::Failed,
+        };
+        assert_eq!(fail_reason.summary_label(), "serial verdict (failed)");
+    }
+
+    #[test]
+    fn progress_reporter_is_enabled_for_long_headless_runs() {
+        let mut config = run_config(
+            Path::new("rom.gb"),
+            Some(NonZeroU64::new(PROGRESS_MIN_FRAME_LIMIT_FOR_PROGRESS).expect("non-zero")),
+            SerialMode::Off,
+        );
+        config.quiet = false;
+
+        let reporter = ProgressReporter::from_config(&config);
+        assert!(reporter.enabled);
+        assert_eq!(reporter.next_report_frame, 600);
+    }
+
+    #[test]
+    fn progress_reporter_is_disabled_for_short_or_non_headless_runs() {
+        let short = run_config(
+            Path::new("rom.gb"),
+            Some(NonZeroU64::new(10).expect("non-zero")),
+            SerialMode::Off,
+        );
+        assert!(!ProgressReporter::from_config(&short).enabled);
+
+        let live_serial = run_config(
+            Path::new("rom.gb"),
+            Some(NonZeroU64::new(2400).expect("non-zero")),
+            SerialMode::Live,
+        );
+        assert!(!ProgressReporter::from_config(&live_serial).enabled);
+    }
+
+    #[test]
+    fn progress_reporter_formats_unbounded_and_bounded_lines() {
+        let bounded = ProgressReporter::format_line(600, NonZeroU64::new(5000));
+        assert_eq!(bounded, "progress: frame 600/5000");
+
+        let unbounded = ProgressReporter::format_line(600, None);
+        assert_eq!(unbounded, "progress: frame 600");
     }
 
     #[test]

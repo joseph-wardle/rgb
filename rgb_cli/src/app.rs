@@ -5,7 +5,7 @@ use crate::config::{CliRequest, RunConfig};
 use crate::emulator::construct_gameboy;
 use crate::error::CliError;
 use crate::rom::{LoadedRom, load_rom};
-use crate::runner::Runner;
+use crate::runner::{RunReport, Runner};
 use crate::trace::setup_trace;
 
 /// Thin application object that owns the process arguments.
@@ -42,12 +42,16 @@ impl App {
             CliRequest::Run(config) => {
                 let _trace_session = setup_trace(config.trace)?;
                 let loaded_rom = load_rom(&config.rom_path)?;
-                if let Some(summary) = Self::build_startup_summary(&config, &loaded_rom) {
-                    println!("{summary}");
+                if let Some(startup_block) = Self::build_startup_block(&config, &loaded_rom) {
+                    println!("{startup_block}");
                 }
+                let quiet = config.quiet;
                 let gameboy = construct_gameboy(config.boot_mode, loaded_rom);
                 let mut runner = Runner::new(config, gameboy);
-                let _report = runner.run()?;
+                let report = runner.run()?;
+                if !quiet {
+                    println!("{}", Self::build_shutdown_block(&report));
+                }
                 Ok(())
             }
         }
@@ -68,25 +72,32 @@ impl App {
         RunConfig::parse_cli_request(user_args).map_err(CliError::from)
     }
 
-    fn build_startup_summary(config: &RunConfig, loaded_rom: &LoadedRom) -> Option<String> {
+    fn build_startup_block(config: &RunConfig, loaded_rom: &LoadedRom) -> Option<String> {
         if config.quiet {
             return None;
         }
 
         let metadata = loaded_rom.metadata();
-        let rom_size_kib = kibibytes(metadata.rom_size_bytes);
-        let ram_size_kib = kibibytes(metadata.ram_size_bytes);
         let frame_limit = frame_limit_label(config.frame_limit);
-        let trace_mode = if config.trace { "enabled" } else { "disabled" };
+        let trace_mode = bool_label(config.trace);
 
         Some(format!(
-            "ROM: {} | title: {} | mapper: {} | size: {rom_size_kib} KiB ROM / {ram_size_kib} KiB RAM | boot: {} | frames: {frame_limit} | serial: {} | trace: {trace_mode}",
+            "Run Start\n  rom: {} ({}, {})\n  boot: {}\n  limits: frames={frame_limit}, serial={}, trace={trace_mode}",
             loaded_rom.path().display(),
             metadata.display_title(),
             metadata.mapper_label(),
             config.boot_mode,
             config.serial_mode,
         ))
+    }
+
+    fn build_shutdown_block(report: &RunReport) -> String {
+        format!(
+            "Run Complete\n  frames: {}\n  stop: {}\n  serial bytes: {}",
+            report.frames_executed,
+            report.stop_reason.summary_label(),
+            report.serial_output.len()
+        )
     }
 
     #[cfg(test)]
@@ -102,18 +113,20 @@ fn frame_limit_label(frame_limit: Option<NonZeroU64>) -> String {
         .unwrap_or_else(|| "unbounded".to_string())
 }
 
-fn kibibytes(bytes: usize) -> usize {
-    bytes / 1024
+fn bool_label(enabled: bool) -> &'static str {
+    if enabled { "on" } else { "off" }
 }
 
 #[cfg(test)]
 mod tests {
     use std::io::Write;
+    use std::num::NonZeroU64;
 
     use super::App;
     use crate::config::{BootMode, CliRequest, SerialMode};
     use crate::error::CliErrorKind;
     use crate::rom::load_rom;
+    use crate::runner::{RunReport, SerialVerdict, SerialVerdictCondition, StopReason};
     use tempfile::NamedTempFile;
 
     #[test]
@@ -260,16 +273,14 @@ mod tests {
             .expect("expected valid run config");
         let loaded_rom = load_rom(&config.rom_path).expect("expected ROM to load");
 
-        let summary = App::build_startup_summary(&config, &loaded_rom).expect("expected summary");
+        let summary =
+            App::build_startup_block(&config, &loaded_rom).expect("expected startup block");
 
-        assert!(summary.contains(&format!("ROM: {}", config.rom_path.display())));
-        assert!(summary.contains("title: TETRIS"));
-        assert!(summary.contains("mapper: ROM-only"));
-        assert!(summary.contains("size: 32 KiB ROM / 0 KiB RAM"));
+        assert!(summary.contains("Run Start"));
+        assert!(summary.contains(&format!("rom: {}", config.rom_path.display())));
+        assert!(summary.contains("(TETRIS, ROM-only)"));
         assert!(summary.contains("boot: cold"));
-        assert!(summary.contains("frames: 1440"));
-        assert!(summary.contains("serial: live"));
-        assert!(summary.contains("trace: disabled"));
+        assert!(summary.contains("limits: frames=1440, serial=live, trace=off"));
     }
 
     #[test]
@@ -284,7 +295,39 @@ mod tests {
             .expect("expected valid run config");
         let loaded_rom = load_rom(&config.rom_path).expect("expected ROM to load");
 
-        assert!(App::build_startup_summary(&config, &loaded_rom).is_none());
+        assert!(App::build_startup_block(&config, &loaded_rom).is_none());
+    }
+
+    #[test]
+    fn shutdown_block_reports_frame_stop_reason_and_serial_size() {
+        let report = RunReport {
+            frames_executed: 1800,
+            stop_reason: StopReason::FrameLimitReached {
+                frame_limit: NonZeroU64::new(1800).expect("non-zero"),
+            },
+            serial_output: "abc".to_string(),
+        };
+
+        let summary = App::build_shutdown_block(&report);
+        assert!(summary.contains("Run Complete"));
+        assert!(summary.contains("frames: 1800"));
+        assert!(summary.contains("stop: frame limit reached (1800)"));
+        assert!(summary.contains("serial bytes: 3"));
+    }
+
+    #[test]
+    fn shutdown_block_reports_serial_verdict() {
+        let report = RunReport {
+            frames_executed: 90,
+            stop_reason: StopReason::SerialVerdictReached {
+                condition: SerialVerdictCondition::BlarggPassFail,
+                verdict: SerialVerdict::Passed,
+            },
+            serial_output: "Passed".to_string(),
+        };
+
+        let summary = App::build_shutdown_block(&report);
+        assert!(summary.contains("stop: serial verdict (passed)"));
     }
 
     fn write_test_rom(
