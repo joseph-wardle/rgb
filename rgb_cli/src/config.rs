@@ -372,6 +372,13 @@ mod tests {
     }
 
     #[test]
+    fn parse_cli_args_surfaces_help_text_as_config_error() {
+        let error = RunConfig::parse_cli_args(["--help"]).expect_err("expected help text error");
+        assert!(error.to_string().contains("Usage:"));
+        assert!(error.to_string().contains("EXAMPLES:"));
+    }
+
+    #[test]
     fn cli_request_parser_recognizes_version_flags() {
         let long = RunConfig::parse_cli_request(["--version"]).expect("expected version request");
         let CliRequest::Version(text) = long else {

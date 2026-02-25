@@ -103,6 +103,8 @@ impl CliError {
 
 #[cfg(test)]
 mod tests {
+    use rgb_core::cartridge::CartridgeError;
+
     use super::{CliError, CliErrorKind};
     use crate::config::RunConfig;
 
@@ -120,6 +122,28 @@ mod tests {
         let error = CliError::runtime_setup("bootstrapping failed");
         assert_eq!(error.kind(), CliErrorKind::Runtime);
         assert_eq!(error.exit_code(), 1);
+    }
+
+    #[test]
+    fn io_errors_map_to_runtime_exit_code() {
+        let error = CliError::io(
+            "reading ROM",
+            "/tmp/missing.gb",
+            std::io::Error::new(std::io::ErrorKind::NotFound, "not found"),
+        );
+        assert_eq!(error.kind(), CliErrorKind::Runtime);
+        assert_eq!(error.exit_code(), 1);
+        assert!(error.to_string().contains("I/O error while reading ROM"));
+        assert!(error.to_string().contains("/tmp/missing.gb"));
+    }
+
+    #[test]
+    fn rom_parse_errors_map_to_runtime_exit_code() {
+        let error = CliError::rom_parse("bad.gb", CartridgeError::UnsupportedCartridgeType(0xFF));
+        assert_eq!(error.kind(), CliErrorKind::Runtime);
+        assert_eq!(error.exit_code(), 1);
+        assert!(error.to_string().contains("failed to parse ROM 'bad.gb'"));
+        assert!(error.to_string().contains("cartridge type 0xFF"));
     }
 
     #[test]

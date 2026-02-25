@@ -63,10 +63,52 @@ mod tests {
         assert!(result.is_ok());
     }
 
+    #[test]
+    fn run_with_args_reports_usage_error_for_bad_arguments() {
+        let result = run_with_args(["rgb_cli", "--unknown", "rom.gb"]);
+        let error = result.expect_err("expected parse failure");
+        assert_eq!(error.kind(), CliErrorKind::Usage);
+        assert!(
+            error
+                .to_string()
+                .contains("unexpected argument '--unknown'")
+        );
+    }
+
+    #[test]
+    fn run_with_args_reports_runtime_error_for_missing_rom_path() {
+        let file = NamedTempFile::new().expect("create temp file path");
+        let missing = file.path().to_path_buf();
+        drop(file);
+        let rom_path = missing.display().to_string();
+
+        let result = run_with_args(["rgb_cli", &rom_path]);
+        let error = result.expect_err("expected missing ROM error");
+        assert_eq!(error.kind(), CliErrorKind::Runtime);
+        assert!(error.to_string().contains("I/O error while reading ROM"));
+    }
+
+    #[test]
+    fn run_with_args_reports_unsupported_cartridge_error() {
+        let mut rom_file = test_rom_file_with_cartridge_type(0xFF);
+        rom_file.flush().expect("flush ROM file");
+        let rom_path = rom_file.path().display().to_string();
+
+        let result = run_with_args(["rgb_cli", "--frames", "1", &rom_path]);
+        let error = result.expect_err("expected unsupported cartridge parse error");
+        assert_eq!(error.kind(), CliErrorKind::Runtime);
+        assert!(error.to_string().contains("failed to parse ROM"));
+        assert!(error.to_string().contains("cartridge type 0xFF"));
+    }
+
     fn valid_test_rom_file() -> NamedTempFile {
+        test_rom_file_with_cartridge_type(0x00)
+    }
+
+    fn test_rom_file_with_cartridge_type(cartridge_type: u8) -> NamedTempFile {
         let mut bytes = vec![0; 0x8000];
         bytes[0x134..0x13A].copy_from_slice(b"LIBROM");
-        bytes[0x147] = 0x00;
+        bytes[0x147] = cartridge_type;
         bytes[0x148] = 0x00;
         bytes[0x149] = 0x00;
 

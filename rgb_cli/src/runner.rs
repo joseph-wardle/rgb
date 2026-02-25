@@ -539,6 +539,26 @@ mod tests {
         assert!(report.serial_output.is_empty());
     }
 
+    #[test]
+    fn runner_stops_at_frame_limit_without_serial_condition() {
+        let mut rom_file = write_test_rom("FRAMECAP", 0x00, 0x00, 0x00);
+        rom_file.flush().expect("flush ROM file");
+
+        let frame_limit = NonZeroU64::new(1).expect("non-zero");
+        let config = run_config(rom_file.path(), Some(frame_limit), SerialMode::Off);
+        let loaded_rom = load_rom(rom_file.path()).expect("load ROM");
+        let gameboy = construct_gameboy(config.boot_mode, loaded_rom);
+        let mut runner = Runner::new(config, gameboy);
+
+        let report = runner.run().expect("runner should stop at frame limit");
+
+        assert_eq!(report.frames_executed, frame_limit.get());
+        assert_eq!(
+            report.stop_reason,
+            StopReason::FrameLimitReached { frame_limit }
+        );
+    }
+
     fn run_config(
         path: &Path,
         frame_limit: Option<NonZeroU64>,

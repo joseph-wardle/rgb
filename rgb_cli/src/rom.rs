@@ -102,11 +102,11 @@ fn metadata_from_info(info: &CartridgeInfo) -> RomMetadata {
 mod tests {
     use std::io::Write;
 
-    use rgb_core::cartridge::MapperKind;
+    use rgb_core::cartridge::{CartridgeError, MapperKind};
     use tempfile::NamedTempFile;
 
     use super::load_rom;
-    use crate::error::CliErrorKind;
+    use crate::error::{CliError, CliErrorKind};
 
     #[test]
     fn load_rom_reports_header_metadata() {
@@ -146,6 +146,15 @@ mod tests {
         let error = load_rom(file.path()).expect_err("expected parse failure");
 
         assert_eq!(error.kind(), CliErrorKind::Runtime);
+        match &error {
+            CliError::RomParse { source, .. } => {
+                assert!(matches!(
+                    source,
+                    CartridgeError::UnsupportedCartridgeType(0xFF)
+                ));
+            }
+            _ => panic!("expected ROM parse error"),
+        }
         assert!(error.to_string().contains("failed to parse ROM"));
         assert!(error.to_string().contains("cartridge type 0xFF"));
     }
