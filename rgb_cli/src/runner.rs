@@ -1,3 +1,10 @@
+//! Deterministic headless run loop.
+//!
+//! Responsibility boundary:
+//! - owns frame-by-frame execution of `DMG`
+//! - enforces explicit exit conditions (frame cap and optional serial verdict)
+//! - handles intentional serial/progress output behavior
+
 use std::borrow::Cow;
 use std::io::{self, Write};
 use std::num::NonZeroU64;

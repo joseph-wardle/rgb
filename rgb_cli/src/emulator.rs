@@ -1,3 +1,9 @@
+//! Emulator construction boundary.
+//!
+//! Responsibility boundary:
+//! - converts loaded cartridge data into boxed core cartridge trait objects
+//! - maps CLI boot mode directly to the correct `DMG` constructor
+
 use rgb_core::cartridge::Cartridge;
 use rgb_core::gameboy::DMG;
 

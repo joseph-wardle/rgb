@@ -1,3 +1,10 @@
+//! ROM loading and cartridge metadata bridge.
+//!
+//! Responsibility boundary:
+//! - reads ROM bytes from disk
+//! - converts bytes into `CartridgeKind`
+//! - exposes concise metadata used by CLI startup output
+
 use std::fs;
 use std::path::{Path, PathBuf};
 

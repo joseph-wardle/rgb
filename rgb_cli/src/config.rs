@@ -1,3 +1,10 @@
+//! CLI argument model and parser.
+//!
+//! Responsibility boundary:
+//! - defines `RunConfig` and CLI-facing enums
+//! - parses clap matches into typed values
+//! - returns user-facing `ConfigError` for invalid invocations
+
 use std::error::Error;
 use std::ffi::OsString;
 use std::fmt::{self, Display, Formatter};

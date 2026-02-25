@@ -1,3 +1,10 @@
+//! Optional tracing setup for a single CLI run.
+//!
+//! Responsibility boundary:
+//! - configures trace subscriber state when requested
+//! - isolates feature-gated behavior behind one API
+//! - returns clear runtime errors when `--trace` is unavailable in the build
+
 use crate::error::CliError;
 
 /// Active trace session for the current CLI run.

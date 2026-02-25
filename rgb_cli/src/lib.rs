@@ -3,6 +3,15 @@
 //! Keeping CLI logic in a library makes behavior unit-testable without
 //! subprocess orchestration. The binary target stays intentionally thin and
 //! only handles process-level concerns like stderr printing and exit codes.
+//!
+//! Module responsibilities:
+//! - `app`: top-level orchestration and user-visible startup/shutdown flow
+//! - `config`: clap parsing and typed run configuration
+//! - `error`: CLI-facing error model and exit codes
+//! - `rom`: ROM loading and metadata extraction
+//! - `emulator`: boot-mode to `DMG` constructor mapping
+//! - `runner`: deterministic frame loop and stop conditions
+//! - `trace`: optional trace setup with feature gating
 
 mod app;
 mod config;

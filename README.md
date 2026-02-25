@@ -81,4 +81,49 @@ The board below is the practical path to a full first-pass emulator that is func
 - [ ] Promote ignored suites milestone-by-milestone as features are completed.
 - [ ] Do a final documentation pass and tag the first playable MVP release with known limitations.
 
+## CLI Usage (`rgb_cli`)
+Current host runner usage for the first-pass MVP flow:
+
+```bash
+cargo run -p rgb_cli -- [OPTIONS] <ROM_PATH>
+```
+
+Examples:
+
+```bash
+# Basic run (post-bios boot, unbounded)
+cargo run -p rgb_cli -- ./roms/tetris.gb
+
+# Fixed-length headless run for repeatable checks
+cargo run -p rgb_cli -- --quiet --frames 600 ./roms/tetris.gb
+
+# Cold boot + live serial passthrough (useful for test ROMs)
+cargo run -p rgb_cli -- --boot cold --serial live ./roms/cpu_instrs.gb
+
+# Trace-enabled run (requires trace feature at build time)
+cargo run -p rgb_cli --features trace -- --trace ./roms/tetris.gb
+```
+
+Supported flags:
+- `--frames <N>`: stop after `N` frames (`N >= 1`), otherwise run until interrupted.
+- `--boot <MODE>`: `cold` or `post-bios` (default: `post-bios`).
+- `--serial <MODE>`: `off`, `live`, or `final` (default: `off`).
+- `--quiet`: suppress startup/status logs (errors still print).
+- `--trace`: enable trace logging; returns an actionable error if the binary was not built with `--features trace`.
+- `-h`, `--help`: print usage text.
+- `-V`, `--version`: print version.
+
+Reference contract: [`rgb_cli/CLI_CONTRACT.md`](rgb_cli/CLI_CONTRACT.md)
+
+## `rgb_cli` Architecture (Responsibility Boundaries)
+- `main.rs`: process boundary only (stderr + exit code mapping).
+- `lib.rs`: testable public entrypoints (`run`, `run_with_args`) and re-exports.
+- `config.rs`: argument parsing and typed configuration model.
+- `error.rs`: user-facing error types, categories, and exit code mapping.
+- `rom.rs`: ROM file loading + cartridge metadata extraction.
+- `emulator.rs`: explicit boot mode to `DMG` constructor mapping.
+- `runner.rs`: deterministic frame loop, stop conditions, and serial/progress output behavior.
+- `trace.rs`: optional trace setup and feature-gated behavior.
+- `app.rs`: orchestration layer connecting parse -> load -> construct -> run.
+
 If you’d like to contribute, aim for changes that keep the learning experience front and centre.

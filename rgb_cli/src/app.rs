@@ -1,3 +1,11 @@
+//! CLI application orchestrator.
+//!
+//! Responsibility boundary:
+//! - accepts process arguments from the entrypoint
+//! - dispatches help/version requests
+//! - wires together config parsing, ROM loading, emulator construction, and runner execution
+//! - formats high-level startup/shutdown user output
+
 use std::ffi::OsString;
 use std::num::NonZeroU64;
 

@@ -1,3 +1,10 @@
+//! CLI boundary error model.
+//!
+//! Responsibility boundary:
+//! - maps parser/runtime/ROM/feature-gating failures into one enum (`CliError`)
+//! - classifies failures as usage vs runtime
+//! - provides stable process exit code mapping
+
 use std::path::Path;
 
 use thiserror::Error;
