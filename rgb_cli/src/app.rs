@@ -6,6 +6,7 @@ use crate::emulator::construct_gameboy;
 use crate::error::CliError;
 use crate::rom::{LoadedRom, load_rom};
 use crate::runner::Runner;
+use crate::trace::setup_trace;
 
 /// Thin application object that owns the process arguments.
 ///
@@ -39,7 +40,7 @@ impl App {
                 Ok(())
             }
             CliRequest::Run(config) => {
-                self.validate_feature_gates(&config)?;
+                let _trace_session = setup_trace(config.trace)?;
                 let loaded_rom = load_rom(&config.rom_path)?;
                 if let Some(summary) = Self::build_startup_summary(&config, &loaded_rom) {
                     println!("{summary}");
@@ -65,17 +66,6 @@ impl App {
     fn parse_cli_request(&self) -> Result<CliRequest, CliError> {
         let user_args = self.raw_args.iter().skip(1).cloned();
         RunConfig::parse_cli_request(user_args).map_err(CliError::from)
-    }
-
-    fn validate_feature_gates(&self, config: &RunConfig) -> Result<(), CliError> {
-        if config.trace {
-            #[cfg(not(feature = "trace"))]
-            {
-                return Err(CliError::TraceFeatureRequired);
-            }
-        }
-
-        Ok(())
     }
 
     fn build_startup_summary(config: &RunConfig, loaded_rom: &LoadedRom) -> Option<String> {
@@ -176,12 +166,14 @@ mod tests {
     #[cfg(feature = "trace")]
     #[test]
     fn app_accepts_trace_flag_with_trace_feature_enabled() {
-        let mut rom_file = write_test_rom("TRACETST", 0x00, 0x00, 0x00);
-        rom_file.flush().expect("flush ROM file");
-        let rom_path = rom_file.path().display().to_string();
+        let file = NamedTempFile::new().expect("create temp file path");
+        let missing = file.path().to_path_buf();
+        drop(file);
+        let rom_path = missing.display().to_string();
 
-        let result = App::from_args(["rgb_cli", "--trace", "--frames", "1", &rom_path]).run();
-        assert!(result.is_ok());
+        let result = App::from_args(["rgb_cli", "--trace", &rom_path]).run();
+        let error = result.expect_err("expected missing ROM after trace setup");
+        assert!(error.to_string().contains("I/O error while reading ROM"));
     }
 
     #[test]

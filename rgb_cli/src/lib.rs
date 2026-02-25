@@ -10,6 +10,7 @@ mod emulator;
 mod error;
 mod rom;
 mod runner;
+mod trace;
 
 pub use config::{BootMode, CliRequest, ConfigError, RunConfig, SerialMode};
 pub use error::{CliError, CliErrorKind, CliExitCode};

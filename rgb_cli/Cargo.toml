@@ -4,12 +4,14 @@ version = "0.1.0"
 edition = "2024"
 
 [features]
-trace = ["rgb_core/trace"]
+trace = ["rgb_core/trace", "dep:tracing", "dep:tracing-subscriber"]
 
 [dependencies]
 clap = "4.5"
 rgb_core = { path = "../rgb_core" }
 thiserror = "2.0"
+tracing = { version = "0.1", optional = true }
+tracing-subscriber = { version = "0.3", optional = true }
 
 [dev-dependencies]
 tempfile = "3.15"
