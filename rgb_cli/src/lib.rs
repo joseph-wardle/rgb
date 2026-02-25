@@ -9,10 +9,12 @@ mod config;
 mod emulator;
 mod error;
 mod rom;
+mod runner;
 
 pub use config::{BootMode, CliRequest, ConfigError, RunConfig, SerialMode};
 pub use error::{CliError, CliErrorKind, CliExitCode};
 pub use rom::{LoadedRom, RomMetadata, load_rom};
+pub use runner::{RunReport, Runner, SerialVerdict, SerialVerdictCondition, StopReason};
 
 /// Runs the CLI application using the current process argument vector.
 pub fn run() -> Result<(), CliError> {
@@ -50,7 +52,7 @@ mod tests {
         rom_file.flush().expect("flush ROM file");
         let rom_path = rom_file.path().display().to_string();
 
-        let result = run_with_args(["rgb_cli", &rom_path]);
+        let result = run_with_args(["rgb_cli", "--frames", "1", &rom_path]);
         assert!(result.is_ok());
     }
 

@@ -5,6 +5,7 @@ use crate::config::{CliRequest, RunConfig};
 use crate::emulator::construct_gameboy;
 use crate::error::CliError;
 use crate::rom::{LoadedRom, load_rom};
+use crate::runner::Runner;
 
 /// Thin application object that owns the process arguments.
 ///
@@ -43,10 +44,9 @@ impl App {
                 if let Some(summary) = Self::build_startup_summary(&config, &loaded_rom) {
                     println!("{summary}");
                 }
-                let _gameboy = construct_gameboy(config.boot_mode, loaded_rom);
-                // Runtime orchestration is implemented in later Milestone 1
-                // steps. By this point, arguments are fully validated, ROM data
-                // is parsed, and hardware state is constructed.
+                let gameboy = construct_gameboy(config.boot_mode, loaded_rom);
+                let mut runner = Runner::new(config, gameboy);
+                let _report = runner.run()?;
                 Ok(())
             }
         }
@@ -150,7 +150,7 @@ mod tests {
         rom_file.flush().expect("flush ROM file");
         let rom_path = rom_file.path().display().to_string();
 
-        let result = App::from_args(["rgb_cli", &rom_path]);
+        let result = App::from_args(["rgb_cli", "--frames", "1", &rom_path]);
         assert!(result.run().is_ok());
     }
 
@@ -180,7 +180,7 @@ mod tests {
         rom_file.flush().expect("flush ROM file");
         let rom_path = rom_file.path().display().to_string();
 
-        let result = App::from_args(["rgb_cli", "--trace", &rom_path]).run();
+        let result = App::from_args(["rgb_cli", "--trace", "--frames", "1", &rom_path]).run();
         assert!(result.is_ok());
     }
 

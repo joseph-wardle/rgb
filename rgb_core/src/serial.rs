@@ -33,6 +33,10 @@ pub struct Serial {
 }
 
 impl Serial {
+    pub fn output_bytes(&self) -> &[u8] {
+        &self.buffer
+    }
+
     pub fn output_string(&self) -> String {
         String::from_utf8_lossy(&self.buffer).to_string()
     }
