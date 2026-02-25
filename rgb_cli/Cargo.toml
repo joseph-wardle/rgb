@@ -10,3 +10,6 @@ trace = ["rgb_core/trace"]
 clap = "4.5"
 rgb_core = { path = "../rgb_core" }
 thiserror = "2.0"
+
+[dev-dependencies]
+tempfile = "3.15"

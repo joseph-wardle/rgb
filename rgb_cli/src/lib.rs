@@ -7,9 +7,11 @@
 mod app;
 mod config;
 mod error;
+mod rom;
 
 pub use config::{BootMode, CliRequest, ConfigError, RunConfig, SerialMode};
 pub use error::{CliError, CliErrorKind, CliExitCode};
+pub use rom::{LoadedRom, RomMetadata, load_rom};
 
 /// Runs the CLI application using the current process argument vector.
 pub fn run() -> Result<(), CliError> {
@@ -29,7 +31,10 @@ where
 
 #[cfg(test)]
 mod tests {
+    use std::io::Write;
+
     use super::{CliErrorKind, run_with_args};
+    use tempfile::NamedTempFile;
 
     #[test]
     fn run_with_args_bubbles_up_usage_or_runtime_failures() {
@@ -40,7 +45,11 @@ mod tests {
 
     #[test]
     fn run_with_args_is_invocable_without_subprocesses() {
-        let result = run_with_args(["rgb_cli", "rom.gb"]);
+        let mut rom_file = valid_test_rom_file();
+        rom_file.flush().expect("flush ROM file");
+        let rom_path = rom_file.path().display().to_string();
+
+        let result = run_with_args(["rgb_cli", &rom_path]);
         assert!(result.is_ok());
     }
 
@@ -48,5 +57,17 @@ mod tests {
     fn run_with_args_accepts_help_flow() {
         let result = run_with_args(["rgb_cli", "--help"]);
         assert!(result.is_ok());
+    }
+
+    fn valid_test_rom_file() -> NamedTempFile {
+        let mut bytes = vec![0; 0x8000];
+        bytes[0x134..0x13A].copy_from_slice(b"LIBROM");
+        bytes[0x147] = 0x00;
+        bytes[0x148] = 0x00;
+        bytes[0x149] = 0x00;
+
+        let mut file = NamedTempFile::new().expect("create temp ROM file");
+        file.write_all(&bytes).expect("write ROM bytes");
+        file
     }
 }
