@@ -633,17 +633,6 @@ impl CPU {
         }
     }
 
-    pub(crate) fn new_post_bios() -> Self {
-        Self {
-            reg: Registers::new_post_bios(),
-            clock: Clock::default(),
-            halt_state: HaltState::Running,
-            ime: false,
-            ime_scheduled: None,
-            halt_bug: false,
-        }
-    }
-
     #[inline]
     fn enter_halt_mode(&mut self) {
         self.halt_state = HaltState::Halted;

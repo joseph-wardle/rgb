@@ -13,21 +13,15 @@ pub struct DMG {
 }
 
 impl DMG {
+    /// Creates a DMG starting from the post-boot-ROM register state (PC=0x0100).
+    /// Boot ROM emulation is not yet implemented, so this is the only way to
+    /// start the emulator.
     pub fn new(cartridge: Box<dyn Cartridge>) -> Self {
         let dmg = Self {
             cpu: CPU::new(),
             bus: MMU::new(cartridge),
         };
-        dmg.log_power_on("cold");
-        dmg
-    }
-
-    pub fn new_post_bios(cartridge: Box<dyn Cartridge>) -> Self {
-        let dmg = Self {
-            cpu: CPU::new_post_bios(),
-            bus: MMU::new(cartridge),
-        };
-        dmg.log_power_on("post_bios");
+        dmg.log_power_on();
         dmg
     }
 
