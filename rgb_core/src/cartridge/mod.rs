@@ -19,16 +19,19 @@
 //! | ROM-only | 0x00        | Tetris, Dr. Mario                    |
 //! | MBC1     | 0x01–0x03   | Super Mario Land, Kirby's Dream Land |
 //! | MBC3     | 0x0F–0x13   | Pokémon Red/Blue, Link's Awakening   |
+//! | MBC5     | 0x19–0x1E   | Pokémon Gold/Silver, Donkey Kong Land|
 
 use crate::memory::Memory;
 use std::fmt;
 
 mod mbc1;
 mod mbc3;
+mod mbc5;
 mod rom_only;
 
 use mbc1::Mbc1;
 use mbc3::Mbc3;
+use mbc5::Mbc5;
 use rom_only::RomOnly;
 
 // ---------------------------------------------------------------------------
@@ -93,6 +96,7 @@ pub enum MapperKind {
     RomOnly,
     Mbc1,
     Mbc3,
+    Mbc5,
 }
 
 // ---------------------------------------------------------------------------
@@ -105,6 +109,7 @@ pub enum CartridgeKind {
     RomOnly(RomOnly),
     Mbc1(Mbc1),
     Mbc3(Mbc3),
+    Mbc5(Mbc5),
 }
 
 impl CartridgeKind {
@@ -122,6 +127,7 @@ impl CartridgeKind {
             MapperKind::RomOnly => Ok(Self::RomOnly(RomOnly::new(data, info))),
             MapperKind::Mbc1    => Ok(Self::Mbc1(Mbc1::new(data, info)?)),
             MapperKind::Mbc3    => Ok(Self::Mbc3(Mbc3::new(data, info))),
+            MapperKind::Mbc5    => Ok(Self::Mbc5(Mbc5::new(data, info))),
         }
     }
 }
@@ -132,6 +138,7 @@ impl Memory for CartridgeKind {
             CartridgeKind::RomOnly(c) => c.read_byte(address),
             CartridgeKind::Mbc1(c)    => c.read_byte(address),
             CartridgeKind::Mbc3(c)    => c.read_byte(address),
+            CartridgeKind::Mbc5(c)    => c.read_byte(address),
         }
     }
 
@@ -140,6 +147,7 @@ impl Memory for CartridgeKind {
             CartridgeKind::RomOnly(c) => c.write_byte(address, value),
             CartridgeKind::Mbc1(c)    => c.write_byte(address, value),
             CartridgeKind::Mbc3(c)    => c.write_byte(address, value),
+            CartridgeKind::Mbc5(c)    => c.write_byte(address, value),
         }
     }
 }
@@ -150,6 +158,7 @@ impl Cartridge for CartridgeKind {
             CartridgeKind::RomOnly(c) => c.info(),
             CartridgeKind::Mbc1(c)    => c.info(),
             CartridgeKind::Mbc3(c)    => c.info(),
+            CartridgeKind::Mbc5(c)    => c.info(),
         }
     }
 }
@@ -211,6 +220,7 @@ impl MapperKind {
             #[allow(clippy::manual_range_patterns)]
             0x01 | 0x02 | 0x03 => Ok(MapperKind::Mbc1),
             0x0F | 0x10 | 0x11 | 0x12 | 0x13 => Ok(MapperKind::Mbc3),
+            0x19 | 0x1A | 0x1B | 0x1C | 0x1D | 0x1E => Ok(MapperKind::Mbc5),
             other => Err(CartridgeError::UnsupportedCartridgeType(other)),
         }
     }
