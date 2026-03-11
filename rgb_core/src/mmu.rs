@@ -78,6 +78,7 @@ impl MMU {
     pub(crate) fn step(&mut self, cycles: u16) {
         self.devices.timer.step(cycles, &mut self.interrupts.flag);
         self.devices.ppu.step(cycles, &mut self.interrupts.flag);
+        self.devices.apu.step(cycles);
         self.log_step(
             cycles,
             self.devices.timer.div,
