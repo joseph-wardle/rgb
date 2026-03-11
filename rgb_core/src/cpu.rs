@@ -1716,9 +1716,12 @@ impl CPU {
             HaltState::Running => None,
             HaltState::Halted => {
                 if self.interrupts_pending(mmu) {
-                    if !self.ime {
-                        self.trigger_halt_bug();
-                    }
+                    // A pending interrupt wakes HALT regardless of IME. If IME is
+                    // disabled the CPU resumes execution without servicing the
+                    // interrupt; if IME is enabled, service_interrupts() will handle
+                    // it on the same step. Either way, no halt bug applies here —
+                    // the bug only fires when HALT is *executed* with a pending
+                    // interrupt (see opcode 0x76).
                     self.halt_state = HaltState::Running;
                     self.log_halt_wake();
                     None
