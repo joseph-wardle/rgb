@@ -21,13 +21,15 @@
 //! rendered in batch at the Drawing→HBlank transition. The output is a
 //! `[u8; 160×144]` framebuffer of shade indices 0–3.
 //!
-//! **Sprites** (Phase 5): OAM scan, 10-sprite-per-scanline limit, sprite/BG
-//! priority, X/Y flip, 8×16 mode, OBP0/OBP1 palettes.
+//! **Sprites / OBJ layer** (Phase 5): OAM scan, 10-sprite-per-scanline limit,
+//! sprite/BG priority, X/Y flip, 8×16 mode, OBP0/OBP1 palettes.
+//!
+//! **Window layer** (Phase 5): second BG plane anchored at (WX−7, WY) with its
+//! own internal line counter and tile map select.
 //!
 //! # What is not yet implemented
 //!
-//! - Window layer (Phase 5)
-//! - Mode 3 variable-length timing from SCX/sprite/window penalties (Phase 5)
+//! - Mode 3 variable-length timing from SCX/sprite/window penalties
 
 use crate::memory::Memory;
 
@@ -67,20 +69,20 @@ const DRAWING_DOTS: u16 = 172;
 // ---------------------------------------------------------------------------
 
 // LCDC (FF40) — LCD Control register bit masks
-const LCDC_LCD_ENABLE:    u8 = 1 << 7; // bit 7: LCD and PPU on/off
-const LCDC_WINDOW_MAP:    u8 = 1 << 6; // bit 6: window tile map — 0 = 0x9800, 1 = 0x9C00
+const LCDC_LCD_ENABLE: u8 = 1 << 7; // bit 7: LCD and PPU on/off
+const LCDC_WINDOW_MAP: u8 = 1 << 6; // bit 6: window tile map — 0 = 0x9800, 1 = 0x9C00
 const LCDC_WINDOW_ENABLE: u8 = 1 << 5; // bit 5: window layer on/off
-const LCDC_TILE_DATA:     u8 = 1 << 4; // bit 4: tile data — 0 = 0x8800 signed, 1 = 0x8000 unsigned
-const LCDC_BG_MAP:        u8 = 1 << 3; // bit 3: BG tile map — 0 = 0x9800, 1 = 0x9C00
-const LCDC_OBJ_SIZE:      u8 = 1 << 2; // bit 2: sprite height — 0 = 8 px, 1 = 16 px
-const LCDC_OBJ_ENABLE:    u8 = 1 << 1; // bit 1: sprite (OBJ) layer on/off
-const LCDC_BG_ENABLE:     u8 = 1 << 0; // bit 0: BG/window on/off (0 = blank white on DMG)
+const LCDC_TILE_DATA: u8 = 1 << 4; // bit 4: tile data — 0 = 0x8800 signed, 1 = 0x8000 unsigned
+const LCDC_BG_MAP: u8 = 1 << 3; // bit 3: BG tile map — 0 = 0x9800, 1 = 0x9C00
+const LCDC_OBJ_SIZE: u8 = 1 << 2; // bit 2: sprite height — 0 = 8 px, 1 = 16 px
+const LCDC_OBJ_ENABLE: u8 = 1 << 1; // bit 1: sprite (OBJ) layer on/off
+const LCDC_BG_ENABLE: u8 = 1 << 0; // bit 0: BG/window on/off (0 = blank white on DMG)
 
 // OAM attribute byte (byte 3 of each OAM entry) bit masks
 const ATTR_BG_PRIORITY: u8 = 1 << 7; // 0 = sprite above BG/window; 1 = behind BG/window colors 1–3
-const ATTR_Y_FLIP:      u8 = 1 << 6; // vertical flip
-const ATTR_X_FLIP:      u8 = 1 << 5; // horizontal flip
-const ATTR_PALETTE:     u8 = 1 << 4; // palette select: 0 = OBP0, 1 = OBP1
+const ATTR_Y_FLIP: u8 = 1 << 6; // vertical flip
+const ATTR_X_FLIP: u8 = 1 << 5; // horizontal flip
+const ATTR_PALETTE: u8 = 1 << 4; // palette select: 0 = OBP0, 1 = OBP1
 
 // STAT (FF41) — interrupt-enable bits (read/write by the CPU)
 const STAT_LYC_INT: u8 = 1 << 6; // fire STAT interrupt when LYC=LY
@@ -160,6 +162,17 @@ pub(crate) struct PPU {
     window_y: u8, // WY (FF4A): window Y position
     window_x: u8, // WX (FF4B): window X position (pixel column = WX − 7)
 
+    // Window internal line counter.
+    //
+    // The window has its own scanline counter that is independent of LY. It
+    // increments each time a scanline actually draws window pixels — it does
+    // NOT increment on VBlank lines or on scanlines where LY < WY. This
+    // keeps the window tile map aligned to the rows the window has actually
+    // appeared on, allowing games to scroll WY mid-frame without glitching
+    // the window tile fetch address. The counter resets to 0 at the start of
+    // every new frame (when LY wraps from 153 back to 0).
+    window_line: u8,
+
     // Timing state machine
     dot: u16,   // T-cycle position within the current scanline (0–455)
     mode: Mode, // current PPU mode; kept in sync with lcd_status bits 0–1
@@ -198,6 +211,7 @@ impl PPU {
             obj_palette1: 0,
             window_y: 0,
             window_x: 0,
+            window_line: 0,
             dot: 0,
             mode: Mode::OamScan, // (ly=0, dot=0) → Mode 2 per timing table
             stat_line: false,
@@ -230,6 +244,9 @@ impl PPU {
         if self.dot >= DOTS_PER_SCANLINE {
             self.dot -= DOTS_PER_SCANLINE;
             self.ly = (self.ly + 1) % TOTAL_SCANLINES;
+            if self.ly == 0 {
+                self.window_line = 0; // new frame — reset the window's internal row counter
+            }
         }
 
         let prev_mode = self.mode;
@@ -378,12 +395,20 @@ impl PPU {
         // --- Sprite layer -----------------------------------------------
         if (self.lcd_control & LCDC_OBJ_ENABLE) != 0 {
             let sprites = self.scan_oam_for_scanline();
-            let sprite_height: u8 = if (self.lcd_control & LCDC_OBJ_SIZE) != 0 { 16 } else { 8 };
+            let sprite_height: u8 = if (self.lcd_control & LCDC_OBJ_SIZE) != 0 {
+                16
+            } else {
+                8
+            };
             let obj_palette0 = self.obj_palette0;
             let obj_palette1 = self.obj_palette1;
 
             for sprite in &sprites {
-                let palette = if (sprite.attrs & ATTR_PALETTE) != 0 { obj_palette1 } else { obj_palette0 };
+                let palette = if (sprite.attrs & ATTR_PALETTE) != 0 {
+                    obj_palette1
+                } else {
+                    obj_palette0
+                };
 
                 // Compute the pixel row within this sprite's tile(s) for this scanline.
                 let row_within = self.ly.wrapping_add(16).wrapping_sub(sprite.y) as u16;
@@ -396,7 +421,11 @@ impl PPU {
                 // 8×16 sprites are two consecutive tiles. The top half uses the
                 // even tile (bit 0 cleared) and the bottom half the odd tile.
                 let tile = if sprite_height == 16 {
-                    if pixel_row < 8 { sprite.tile & 0xFE } else { sprite.tile | 0x01 }
+                    if pixel_row < 8 {
+                        sprite.tile & 0xFE
+                    } else {
+                        sprite.tile | 0x01
+                    }
                 } else {
                     sprite.tile
                 };
@@ -415,7 +444,11 @@ impl PPU {
                     }
 
                     // Bit 7 is leftmost; x-flip reverses the column order.
-                    let bit = if (sprite.attrs & ATTR_X_FLIP) != 0 { col } else { 7 - col };
+                    let bit = if (sprite.attrs & ATTR_X_FLIP) != 0 {
+                        col
+                    } else {
+                        7 - col
+                    };
                     let color_id = ((hi >> bit) & 1) << 1 | ((lo >> bit) & 1);
 
                     if color_id == 0 {
@@ -446,7 +479,11 @@ impl PPU {
     /// first — each successive draw overwrites it, so the last-drawn
     /// (lowest X, lowest oam_idx) sprite wins.
     fn scan_oam_for_scanline(&self) -> Vec<Sprite> {
-        let sprite_height: u8 = if (self.lcd_control & LCDC_OBJ_SIZE) != 0 { 16 } else { 8 };
+        let sprite_height: u8 = if (self.lcd_control & LCDC_OBJ_SIZE) != 0 {
+            16
+        } else {
+            8
+        };
         let ly = self.ly;
 
         let mut sprites: Vec<Sprite> = self
@@ -460,7 +497,13 @@ impl PPU {
                 // sprites (wrapping around u8 produces a large number).
                 let row_within = ly.wrapping_add(16).wrapping_sub(y);
                 if row_within < sprite_height {
-                    Some(Sprite { y, x, tile, attrs, oam_idx: i as u8 })
+                    Some(Sprite {
+                        y,
+                        x,
+                        tile,
+                        attrs,
+                        oam_idx: i as u8,
+                    })
                 } else {
                     None
                 }
@@ -486,8 +529,78 @@ impl PPU {
         }
     }
 
-    /// Placeholder for the window layer; replaced in Phase 5 commit 3.
-    fn render_window_scanline(&mut self, _color_ids: &mut [u8; SCREEN_WIDTH], _shades: &mut [u8; SCREEN_WIDTH]) {}
+    /// Render the window layer into `color_ids` and `shades` for this scanline,
+    /// overwriting BG pixels wherever the window is visible.
+    ///
+    /// The window is a second background plane that covers the screen from
+    /// (WX−7, WY) downward. It uses its own 32×32 tile map (selected by
+    /// LCDC bit 6) and the same tile data addressing as the BG. The window
+    /// always uses BGP for palette mapping.
+    ///
+    /// Unlike the BG, the window is not scrollable: column 0 of the window
+    /// tile map always aligns to screen column WX−7. The window's internal
+    /// line counter (`window_line`) tracks how many scanlines have actually
+    /// drawn window pixels, so that the tile row advances correctly even if
+    /// WY is changed mid-frame or the window is toggled.
+    fn render_window_scanline(
+        &mut self,
+        color_ids: &mut [u8; SCREEN_WIDTH],
+        shades: &mut [u8; SCREEN_WIDTH],
+    ) {
+        if (self.lcd_control & LCDC_WINDOW_ENABLE) == 0 {
+            return;
+        }
+        // Window only appears on scanlines at or below its top edge.
+        if self.ly < self.window_y {
+            return;
+        }
+        // WX encodes the left screen column as WX−7. WX < 7 is off-screen;
+        // WX > 166 (screen column 159) would also be off-screen.
+        let screen_left = (self.window_x as usize).saturating_sub(7);
+        if screen_left >= SCREEN_WIDTH {
+            return;
+        }
+
+        let map_base = self.window_tile_map_base();
+        let tile_row = (self.window_line / 8) as u16;
+        let pixel_row = (self.window_line % 8) as u16;
+        let bg_palette = self.bg_palette;
+
+        for screen_x in screen_left..SCREEN_WIDTH {
+            // Column within the window tile map (0-based from the window's left edge).
+            let win_col = (screen_x - screen_left) as u8;
+            let tile_col = (win_col / 8) as u16;
+
+            let tile_id = self.vram[(map_base + tile_row * 32 + tile_col) as usize];
+            let tile_base = self.tile_data_offset(tile_id);
+            let lo = self.vram[(tile_base + pixel_row * 2) as usize];
+            let hi = self.vram[(tile_base + pixel_row * 2 + 1) as usize];
+
+            // Bit 7 of each byte is the leftmost pixel of the row.
+            let bit = 7 - (win_col % 8);
+            let color_id = ((hi >> bit) & 1) << 1 | ((lo >> bit) & 1);
+
+            color_ids[screen_x] = color_id;
+            shades[screen_x] = apply_palette(bg_palette, color_id);
+        }
+
+        // The window line counter advances only on scanlines that draw window
+        // pixels — not on VBlank lines or scanlines above WY.
+        self.window_line += 1;
+    }
+
+    /// VRAM byte offset of the active window tile map.
+    ///
+    /// LCDC bit 6 selects between the two 32×32 tile maps:
+    ///   0 → map at 0x9800 (VRAM offset 0x1800)
+    ///   1 → map at 0x9C00 (VRAM offset 0x1C00)
+    fn window_tile_map_base(&self) -> u16 {
+        if (self.lcd_control & LCDC_WINDOW_MAP) != 0 {
+            0x1C00
+        } else {
+            0x1800
+        }
+    }
 
     /// VRAM byte offset of the first byte of tile data for `tile_id`.
     ///
