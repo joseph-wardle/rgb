@@ -40,8 +40,8 @@ pub(crate) struct Joypad {
 }
 
 // Select-bit masks for each row (written to bits 5-4 of FF00).
-const SELECT_DPAD: u8 = 1 << 5; // P15: 0 = direction pad row is readable
-const SELECT_BUTTONS: u8 = 1 << 4; // P14: 0 = action button row is readable
+const SELECT_DPAD: u8 = 1 << 4; // P14: 0 = direction pad row is readable
+const SELECT_BUTTONS: u8 = 1 << 5; // P15: 0 = action button row is readable
 
 impl Default for Joypad {
     fn default() -> Self {
