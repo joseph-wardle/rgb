@@ -30,17 +30,17 @@ pub enum Button {
 
 pub(crate) struct Joypad {
     // The CPU writes bits 4–5 to choose which row(s) to expose on bits 0–3.
-    select: u8,   // bit 5 = P15 (dpad row), bit 4 = P14 (button row); active-low select
+    select: u8, // bit 5 = P15 (dpad row), bit 4 = P14 (button row); active-low select
 
     // Button states stored per row, independent of what is currently selected.
     // Both rows are always maintained so switching the select bits reads correctly
     // without re-pressing buttons.
-    dpad:    u8,  // bits 3–0: Down / Up / Left / Right, active-low (0 = pressed)
-    buttons: u8,  // bits 3–0: Start / Select / B / A,   active-low (0 = pressed)
+    dpad: u8,    // bits 3–0: Down / Up / Left / Right, active-low (0 = pressed)
+    buttons: u8, // bits 3–0: Start / Select / B / A,   active-low (0 = pressed)
 }
 
 // Select-bit masks for each row (written to bits 5-4 of FF00).
-const SELECT_DPAD:    u8 = 1 << 5; // P15: 0 = direction pad row is readable
+const SELECT_DPAD: u8 = 1 << 5; // P15: 0 = direction pad row is readable
 const SELECT_BUTTONS: u8 = 1 << 4; // P14: 0 = action button row is readable
 
 impl Default for Joypad {
@@ -52,8 +52,8 @@ impl Default for Joypad {
 impl Joypad {
     pub(crate) fn new() -> Self {
         Joypad {
-            select:  0x30, // both rows deselected at power-on (bits 4-5 = 1)
-            dpad:    0x0F, // all directions released
+            select: 0x30,  // both rows deselected at power-on (bits 4-5 = 1)
+            dpad: 0x0F,    // all directions released
             buttons: 0x0F, // all buttons released
         }
     }
@@ -106,8 +106,8 @@ impl Joypad {
     pub(crate) fn release(&mut self, button: Button) {
         let mask = Self::button_mask(button);
         match button {
-            Button::Down | Button::Up | Button::Left | Button::Right => self.dpad    |= mask,
-            Button::Start | Button::Select | Button::B | Button::A   => self.buttons |= mask,
+            Button::Down | Button::Up | Button::Left | Button::Right => self.dpad |= mask,
+            Button::Start | Button::Select | Button::B | Button::A => self.buttons |= mask,
         }
     }
 
@@ -120,10 +120,10 @@ impl Joypad {
     ///   bit 0 = Right / A
     fn button_mask(button: Button) -> u8 {
         match button {
-            Button::Down  | Button::Start  => 1 << 3,
-            Button::Up    | Button::Select => 1 << 2,
-            Button::Left  | Button::B      => 1 << 1,
-            Button::Right | Button::A      => 1 << 0,
+            Button::Down | Button::Start => 1 << 3,
+            Button::Up | Button::Select => 1 << 2,
+            Button::Left | Button::B => 1 << 1,
+            Button::Right | Button::A => 1 << 0,
         }
     }
 }

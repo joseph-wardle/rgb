@@ -36,13 +36,13 @@ const FRAME_DURATION: Duration = Duration::from_nanos(16_742_706);
 /// most games read the joypad (polling FF00 rather than relying on the
 /// joypad interrupt).
 const KEY_MAP: &[(Key, Button)] = &[
-    (Key::Right,  Button::Right),
-    (Key::Left,   Button::Left),
-    (Key::Up,     Button::Up),
-    (Key::Down,   Button::Down),
-    (Key::Z,      Button::B),
-    (Key::X,      Button::A),
-    (Key::Enter,  Button::Start),
+    (Key::Right, Button::Right),
+    (Key::Left, Button::Left),
+    (Key::Up, Button::Up),
+    (Key::Down, Button::Down),
+    (Key::Z, Button::B),
+    (Key::X, Button::A),
+    (Key::Enter, Button::Start),
     (Key::RightShift, Button::Select),
 ];
 
@@ -63,7 +63,10 @@ fn shade_to_rgb(framebuffer: &[u8]) -> Vec<u32> {
         0x346856, // shade 2: dark
         0x081820, // shade 3: darkest
     ];
-    framebuffer.iter().map(|&shade| PALETTE[shade as usize]).collect()
+    framebuffer
+        .iter()
+        .map(|&shade| PALETTE[shade as usize])
+        .collect()
 }
 
 // ---------------------------------------------------------------------------
