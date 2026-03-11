@@ -15,7 +15,6 @@
 
 /// The eight DMG buttons, named as they appear on the hardware.
 #[derive(Copy, Clone, Debug)]
-#[allow(dead_code)] // re-exported and wired to the frontend in the next commit
 pub enum Button {
     // Direction pad
     Right,
@@ -86,7 +85,6 @@ impl Joypad {
     /// (active-low). Returns `true` when the joypad interrupt should fire —
     /// i.e. the button was previously released *and* its row is currently
     /// selected by the CPU.
-    #[allow(dead_code)] // wired to frontend in the next commit
     pub(crate) fn press(&mut self, button: Button) -> bool {
         let mask = Self::button_mask(button);
         match button {
@@ -105,7 +103,6 @@ impl Joypad {
 
     /// Record a button release from the host. Sets the button's bit back to
     /// 1 (active-low released). No interrupt fires on release.
-    #[allow(dead_code)] // wired to frontend in the next commit
     pub(crate) fn release(&mut self, button: Button) {
         let mask = Self::button_mask(button);
         match button {

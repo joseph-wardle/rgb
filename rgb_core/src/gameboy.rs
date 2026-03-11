@@ -1,5 +1,6 @@
 use crate::cartridge::Cartridge;
 use crate::cpu::CPU;
+use crate::input::Button;
 #[cfg(test)]
 use crate::memory::Memory;
 use crate::mmu::MMU;
@@ -81,10 +82,24 @@ impl DMG {
     }
 
     /// The most recently completed frame as a flat array of shade indices (0–3).
-    /// Laid out row-major: index = y * 160 + x. All zeroes until the pixel
-    /// pipeline is implemented.
+    /// Laid out row-major: index = y * 160 + x.
     pub fn framebuffer(&self) -> &[u8] {
         self.bus.framebuffer()
+    }
+
+    /// Notify the emulator that a host key mapped to `button` is now held.
+    ///
+    /// Call once per frame for every button that is currently pressed (not
+    /// just on the keydown edge). Triggers a joypad interrupt if the button's
+    /// row is selected and the button was previously released.
+    pub fn press(&mut self, button: Button) {
+        self.bus.press_button(button);
+    }
+
+    /// Notify the emulator that a host key mapped to `button` has been
+    /// released. No interrupt is generated on release.
+    pub fn release(&mut self, button: Button) {
+        self.bus.release_button(button);
     }
 }
 
