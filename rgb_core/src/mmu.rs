@@ -187,4 +187,8 @@ impl MMU {
     pub(crate) fn serial(&self) -> &Serial {
         &self.devices.serial
     }
+
+    pub(crate) fn framebuffer(&self) -> &[u8] {
+        self.devices.ppu.framebuffer()
+    }
 }

@@ -1,22 +1,31 @@
 use crate::memory::Memory;
 
+/// The DMG screen is 160×144 pixels. Each pixel is a shade index 0–3,
+/// where 0 is white and 3 is black (before palette mapping).
+pub const SCREEN_WIDTH: usize = 160;
+pub const SCREEN_HEIGHT: usize = 144;
+
 #[expect(clippy::upper_case_acronyms)]
 pub(crate) struct PPU {
     vram: [u8; 0x2000], // Video RAM
     oam: [u8; 0xA0],    // Object Attribute Memory
-    lcd_control: u8,    // LCD Control Register
-    lcd_status: u8,     // LCD Status Register
-    scroll_y: u8,       // Scroll Y Register
-    scroll_x: u8,       // Scroll X Register
-    ly: u8,             // LY Register (current scanline)
-    lyc: u8,            // LYC Register (LY Compare)
-    dma: u8,            // DMA Transfer Register
-    bg_palette: u8,     // Background Palette Data
-    obj_palette0: u8,   // Object Palette 0 Data
-    obj_palette1: u8,   // Object Palette 1 Data
-    window_y: u8,       // Window Y Position
-    window_x: u8,       // Window X Position
-    cycle_counter: u32, // Accumulated PPU cycles since last VBlank
+    lcd_control: u8,    // LCD Control Register  (FF40)
+    lcd_status: u8,     // LCD Status Register   (FF41)
+    scroll_y: u8,       // Scroll Y Register     (FF42)
+    scroll_x: u8,       // Scroll X Register     (FF43)
+    ly: u8,             // Current scanline      (FF44, 0-153)
+    lyc: u8,            // LY Compare            (FF45)
+    dma: u8,            // DMA Transfer Register (FF46)
+    bg_palette: u8,     // Background Palette    (FF47)
+    obj_palette0: u8,   // Object Palette 0      (FF48)
+    obj_palette1: u8,   // Object Palette 1      (FF49)
+    window_y: u8,       // Window Y Position     (FF4A)
+    window_x: u8,       // Window X Position     (FF4B)
+    cycle_counter: u32, // Accumulated T-cycles within the current frame
+
+    // Output framebuffer. Each entry is a shade index 0-3. Populated by the
+    // pixel pipeline (not yet implemented); reads all-zero until then.
+    framebuffer: [u8; SCREEN_WIDTH * SCREEN_HEIGHT],
 }
 
 impl Default for PPU {
@@ -34,7 +43,7 @@ impl PPU {
             lcd_status: 0,
             scroll_y: 0,
             scroll_x: 0,
-            ly: 0x90, //0,
+            ly: 0,
             lyc: 0,
             dma: 0,
             bg_palette: 0,
@@ -43,7 +52,12 @@ impl PPU {
             window_y: 0,
             window_x: 0,
             cycle_counter: 0,
+            framebuffer: [0; SCREEN_WIDTH * SCREEN_HEIGHT],
         }
+    }
+
+    pub(crate) fn framebuffer(&self) -> &[u8] {
+        &self.framebuffer
     }
 
     pub(crate) fn step(&mut self, cycles: u16, interrupt_flag: &mut u8) {

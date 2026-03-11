@@ -79,6 +79,13 @@ impl DMG {
     pub fn serial_output(&self) -> String {
         self.bus.serial().output_string()
     }
+
+    /// The most recently completed frame as a flat array of shade indices (0–3).
+    /// Laid out row-major: index = y * 160 + x. All zeroes until the pixel
+    /// pipeline is implemented.
+    pub fn framebuffer(&self) -> &[u8] {
+        self.bus.framebuffer()
+    }
 }
 
 #[cfg(test)]
