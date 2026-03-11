@@ -38,4 +38,10 @@ impl Cartridge for RomOnly {
     fn info(&self) -> &CartridgeInfo {
         &self.info
     }
+
+    fn save_data(&self) -> Option<&[u8]> {
+        None // ROM-only cartridges have no RAM to save
+    }
+
+    fn load_save_data(&mut self, _data: &[u8]) {}
 }

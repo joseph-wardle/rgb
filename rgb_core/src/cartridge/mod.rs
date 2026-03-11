@@ -75,15 +75,26 @@ pub struct CartridgeInfo {
     pub ram_size:  usize,
     pub rom_banks: usize,
     pub ram_banks: usize,
+    /// `true` if the cartridge includes a battery to keep RAM powered off.
+    /// When `true`, the CLI saves RAM to a `.sav` file and restores it on load.
+    pub battery:   bool,
 }
 
 /// Trait implemented by all mapper backends.
 ///
-/// Extends [`Memory`] with cartridge-specific metadata. The rest of the
-/// emulator holds a `Box<dyn Cartridge>` so it never needs to name a
-/// specific mapper type.
+/// Extends [`Memory`] with cartridge-specific metadata and battery-save
+/// support. The rest of the emulator holds a `Box<dyn Cartridge>` so it
+/// never needs to name a specific mapper type.
 pub trait Cartridge: Memory {
     fn info(&self) -> &CartridgeInfo;
+
+    /// Current RAM contents for battery-backed saves, or `None` if this
+    /// cartridge has no battery. Call at shutdown to write the `.sav` file.
+    fn save_data(&self) -> Option<&[u8]>;
+
+    /// Restore RAM from a previous session's `.sav` file.
+    /// No-op if this cartridge has no battery or the data size mismatches.
+    fn load_save_data(&mut self, data: &[u8]);
 }
 
 // ---------------------------------------------------------------------------
@@ -161,6 +172,24 @@ impl Cartridge for CartridgeKind {
             CartridgeKind::Mbc5(c)    => c.info(),
         }
     }
+
+    fn save_data(&self) -> Option<&[u8]> {
+        match self {
+            CartridgeKind::RomOnly(c) => c.save_data(),
+            CartridgeKind::Mbc1(c)    => c.save_data(),
+            CartridgeKind::Mbc3(c)    => c.save_data(),
+            CartridgeKind::Mbc5(c)    => c.save_data(),
+        }
+    }
+
+    fn load_save_data(&mut self, data: &[u8]) {
+        match self {
+            CartridgeKind::RomOnly(c) => c.load_save_data(data),
+            CartridgeKind::Mbc1(c)    => c.load_save_data(data),
+            CartridgeKind::Mbc3(c)    => c.load_save_data(data),
+            CartridgeKind::Mbc5(c)    => c.load_save_data(data),
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -209,6 +238,7 @@ impl Header {
             ram_size:  ram_banks * ram_bank_size,
             rom_banks,
             ram_banks,
+            battery:   has_battery(self.cartridge_type),
         })
     }
 }
@@ -224,6 +254,23 @@ impl MapperKind {
             other => Err(CartridgeError::UnsupportedCartridgeType(other)),
         }
     }
+}
+
+/// Whether a cartridge type byte indicates a battery is present.
+///
+/// The BATTERY flag in the cartridge type means the RAM is kept alive by a
+/// coin cell when the Game Boy is off, allowing saves to persist. We use
+/// this to decide whether to write a `.sav` file on exit.
+fn has_battery(cartridge_type: u8) -> bool {
+    matches!(
+        cartridge_type,
+        0x03        // MBC1+RAM+BATTERY
+        | 0x0F      // MBC3+TIMER+BATTERY
+        | 0x10      // MBC3+TIMER+RAM+BATTERY
+        | 0x13      // MBC3+RAM+BATTERY
+        | 0x1B      // MBC5+RAM+BATTERY
+        | 0x1E      // MBC5+RUMBLE+RAM+BATTERY
+    )
 }
 
 // ---------------------------------------------------------------------------

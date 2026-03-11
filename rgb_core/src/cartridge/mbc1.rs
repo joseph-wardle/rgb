@@ -181,4 +181,15 @@ impl Cartridge for Mbc1 {
     fn info(&self) -> &CartridgeInfo {
         &self.info
     }
+
+    fn save_data(&self) -> Option<&[u8]> {
+        if self.info.battery { self.ram.as_deref() } else { None }
+    }
+
+    fn load_save_data(&mut self, data: &[u8]) {
+        if let Some(ram) = self.ram.as_mut() {
+            let len = ram.len().min(data.len());
+            ram[..len].copy_from_slice(&data[..len]);
+        }
+    }
 }

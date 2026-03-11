@@ -200,6 +200,17 @@ impl MMU {
         &self.devices.serial
     }
 
+    /// Battery-backed RAM contents for writing to a `.sav` file, or `None`
+    /// if the cartridge has no battery.
+    pub(crate) fn save_data(&self) -> Option<&[u8]> {
+        self.devices.cartridge.save_data()
+    }
+
+    /// Restore RAM from a `.sav` file loaded at startup.
+    pub(crate) fn load_save_data(&mut self, data: &[u8]) {
+        self.devices.cartridge.load_save_data(data);
+    }
+
     pub(crate) fn framebuffer(&self) -> &[u8] {
         self.devices.ppu.framebuffer()
     }

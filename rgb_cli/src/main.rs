@@ -14,6 +14,7 @@ use minifb::{Key, Window, WindowOptions};
 use rgb_core::cartridge::{Cartridge, CartridgeKind};
 use rgb_core::gameboy::DMG;
 use rgb_core::{Button, SCREEN_HEIGHT, SCREEN_WIDTH};
+use std::path::PathBuf;
 use std::time::{Duration, Instant};
 use std::{env, fs, process};
 
@@ -84,7 +85,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let rom = fs::read(&rom_path)?;
     let cartridge = CartridgeKind::from_bytes(rom)?;
     let title = cartridge.info().title.clone();
+    let has_battery = cartridge.info().battery;
+    let save_path = PathBuf::from(&rom_path).with_extension("sav");
+
     let mut dmg = DMG::new(Box::new(cartridge));
+
+    // Restore battery-backed RAM from a previous session if a save file exists.
+    if has_battery {
+        if let Ok(save_bytes) = fs::read(&save_path) {
+            dmg.load_save_data(&save_bytes);
+        }
+    }
 
     // --- Open window --------------------------------------------------------
     // The window title shows the ROM name so you can tell which game is running.
@@ -130,6 +141,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let elapsed = frame_start.elapsed();
         if elapsed < FRAME_DURATION {
             std::thread::sleep(FRAME_DURATION - elapsed);
+        }
+    }
+
+    // Persist battery-backed RAM so the next session can restore it.
+    if let Some(data) = dmg.save_data() {
+        if let Err(e) = fs::write(&save_path, data) {
+            eprintln!("warning: could not write save file {}: {e}", save_path.display());
         }
     }
 
