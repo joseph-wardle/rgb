@@ -21,9 +21,11 @@
 //! rendered in batch at the Drawing→HBlank transition. The output is a
 //! `[u8; 160×144]` framebuffer of shade indices 0–3.
 //!
+//! **Sprites** (Phase 5): OAM scan, 10-sprite-per-scanline limit, sprite/BG
+//! priority, X/Y flip, 8×16 mode, OBP0/OBP1 palettes.
+//!
 //! # What is not yet implemented
 //!
-//! - Sprites / OBJ layer (Phase 5)
 //! - Window layer (Phase 5)
 //! - Mode 3 variable-length timing from SCX/sprite/window penalties (Phase 5)
 
@@ -64,11 +66,21 @@ const DRAWING_DOTS: u16 = 172;
 // Register bit masks — named for their register and function
 // ---------------------------------------------------------------------------
 
-// LCDC (FF40)
-const LCDC_LCD_ENABLE: u8 = 1 << 7; // bit 7: LCD and PPU on/off
-const LCDC_BG_MAP: u8 = 1 << 3; // bit 3: BG tile map — 0 = 0x9800, 1 = 0x9C00
-const LCDC_TILE_DATA: u8 = 1 << 4; // bit 4: tile data  — 0 = 0x8800 signed, 1 = 0x8000 unsigned
-const LCDC_BG_ENABLE: u8 = 1 << 0; // bit 0: 0 = BG is blank (white) on DMG
+// LCDC (FF40) — LCD Control register bit masks
+const LCDC_LCD_ENABLE:    u8 = 1 << 7; // bit 7: LCD and PPU on/off
+const LCDC_WINDOW_MAP:    u8 = 1 << 6; // bit 6: window tile map — 0 = 0x9800, 1 = 0x9C00
+const LCDC_WINDOW_ENABLE: u8 = 1 << 5; // bit 5: window layer on/off
+const LCDC_TILE_DATA:     u8 = 1 << 4; // bit 4: tile data — 0 = 0x8800 signed, 1 = 0x8000 unsigned
+const LCDC_BG_MAP:        u8 = 1 << 3; // bit 3: BG tile map — 0 = 0x9800, 1 = 0x9C00
+const LCDC_OBJ_SIZE:      u8 = 1 << 2; // bit 2: sprite height — 0 = 8 px, 1 = 16 px
+const LCDC_OBJ_ENABLE:    u8 = 1 << 1; // bit 1: sprite (OBJ) layer on/off
+const LCDC_BG_ENABLE:     u8 = 1 << 0; // bit 0: BG/window on/off (0 = blank white on DMG)
+
+// OAM attribute byte (byte 3 of each OAM entry) bit masks
+const ATTR_BG_PRIORITY: u8 = 1 << 7; // 0 = sprite above BG/window; 1 = behind BG/window colors 1–3
+const ATTR_Y_FLIP:      u8 = 1 << 6; // vertical flip
+const ATTR_X_FLIP:      u8 = 1 << 5; // horizontal flip
+const ATTR_PALETTE:     u8 = 1 << 4; // palette select: 0 = OBP0, 1 = OBP1
 
 // STAT (FF41) — interrupt-enable bits (read/write by the CPU)
 const STAT_LYC_INT: u8 = 1 << 6; // fire STAT interrupt when LYC=LY
@@ -98,6 +110,24 @@ enum Mode {
     VBlank = 1,  // Mode 1: vertical blank (scanlines 144–153); VRAM accessible
     OamScan = 2, // Mode 2: PPU locks OAM and scans for sprites on this line
     Drawing = 3, // Mode 3: pixel pipeline is rendering; VRAM and OAM locked
+}
+
+// ---------------------------------------------------------------------------
+// Sprite (OBJ)
+// ---------------------------------------------------------------------------
+
+/// One decoded OAM entry.
+///
+/// The Game Boy stores 40 sprites as 4-byte records in OAM (0xFE00–0xFE9F).
+/// Each record contains a raw Y and X with hardware biases: the sprite appears
+/// at screen row `y − 16` and column `x − 8`, so a sprite fully off screen has
+/// Y = 0 or X = 0, and one at the top-left corner has Y = 16, X = 8.
+struct Sprite {
+    y: u8,       // OAM Y (screen row  = y − 16)
+    x: u8,       // OAM X (screen col  = x − 8)
+    tile: u8,    // tile index; sprites always use the 0x8000 unsigned method
+    attrs: u8,   // ATTR_* flags: priority, flip, palette
+    oam_idx: u8, // position in OAM (0–39); breaks X ties — lower index wins
 }
 
 // ---------------------------------------------------------------------------
@@ -292,49 +322,155 @@ impl PPU {
     }
 
     // -----------------------------------------------------------------------
-    // Background rendering (Phase 3)
+    // Scanline rendering (Phase 3 + 5)
     // -----------------------------------------------------------------------
 
     /// Render the current scanline (`self.ly`) into the framebuffer.
     ///
     /// Called once per visible scanline, at the Drawing→HBlank boundary.
+    ///
+    /// Compositing order (back to front):
+    ///   1. Background (or blank white if LCDC bit 0 is clear)
+    ///   2. Window (Phase 5 — rendered by `render_window_scanline`)
+    ///   3. Sprites (Phase 5 — composited with BG-priority checking)
+    ///
+    /// Two parallel buffers thread through all three layers:
+    ///   `color_ids` — raw color index (0–3) used for sprite priority checks
+    ///   `shades`    — final shade value (0–3) copied to the framebuffer
     fn render_scanline(&mut self) {
-        if (self.lcd_control & LCDC_BG_ENABLE) == 0 {
-            // LCDC bit 0 clear: background is forced blank (white = shade 0).
-            let y = self.ly as usize;
-            self.framebuffer[y * SCREEN_WIDTH..(y + 1) * SCREEN_WIDTH].fill(0);
-            return;
+        let mut color_ids = [0u8; SCREEN_WIDTH]; // color indices for priority checks
+        let mut shades = [0u8; SCREEN_WIDTH]; // output shades (default: white)
+
+        // --- Background layer -------------------------------------------
+        if (self.lcd_control & LCDC_BG_ENABLE) != 0 {
+            // Precompute scanline-level values once before the per-pixel loop.
+            let map_base = self.bg_tile_map_base();
+            let map_y = self.ly.wrapping_add(self.scroll_y);
+            let tile_row = (map_y / 8) as u16;
+            let pixel_row = (map_y % 8) as u16;
+            let scroll_x = self.scroll_x;
+            let bg_palette = self.bg_palette;
+
+            for x in 0..SCREEN_WIDTH as u8 {
+                let map_x = x.wrapping_add(scroll_x);
+                let tile_col = (map_x / 8) as u16;
+
+                // The tile map is 32 tiles wide; each entry is one byte (tile ID).
+                let tile_id = self.vram[(map_base + tile_row * 32 + tile_col) as usize];
+
+                // Each tile is 16 bytes (2 bytes × 8 pixel rows).
+                let tile_base = self.tile_data_offset(tile_id);
+                let lo = self.vram[(tile_base + pixel_row * 2) as usize];
+                let hi = self.vram[(tile_base + pixel_row * 2 + 1) as usize];
+
+                // Bit 7 of each byte is the leftmost pixel of the row.
+                let bit = 7 - (map_x % 8);
+                let color_id = ((hi >> bit) & 1) << 1 | ((lo >> bit) & 1);
+
+                color_ids[x as usize] = color_id;
+                shades[x as usize] = apply_palette(bg_palette, color_id);
+            }
         }
 
-        // Precompute scanline-level values once before the per-pixel loop.
-        let map_base = self.bg_tile_map_base();
-        let map_y = self.ly.wrapping_add(self.scroll_y);
-        let tile_row = (map_y / 8) as u16; // which row of tiles in the map
-        let pixel_row = (map_y % 8) as u16; // which pixel row within the tile
-        let scroll_x = self.scroll_x;
-        let bg_palette = self.bg_palette;
+        // --- Window layer (Phase 5) -------------------------------------
+        self.render_window_scanline(&mut color_ids, &mut shades);
+
+        // --- Sprite layer -----------------------------------------------
+        if (self.lcd_control & LCDC_OBJ_ENABLE) != 0 {
+            let sprites = self.scan_oam_for_scanline();
+            let sprite_height: u8 = if (self.lcd_control & LCDC_OBJ_SIZE) != 0 { 16 } else { 8 };
+            let obj_palette0 = self.obj_palette0;
+            let obj_palette1 = self.obj_palette1;
+
+            for sprite in &sprites {
+                let palette = if (sprite.attrs & ATTR_PALETTE) != 0 { obj_palette1 } else { obj_palette0 };
+
+                // Compute the pixel row within this sprite's tile(s) for this scanline.
+                let row_within = self.ly.wrapping_add(16).wrapping_sub(sprite.y) as u16;
+                let pixel_row = if (sprite.attrs & ATTR_Y_FLIP) != 0 {
+                    (sprite_height as u16 - 1) - row_within
+                } else {
+                    row_within
+                };
+
+                // 8×16 sprites are two consecutive tiles. The top half uses the
+                // even tile (bit 0 cleared) and the bottom half the odd tile.
+                let tile = if sprite_height == 16 {
+                    if pixel_row < 8 { sprite.tile & 0xFE } else { sprite.tile | 0x01 }
+                } else {
+                    sprite.tile
+                };
+
+                // Sprites always use the 0x8000 unsigned addressing method.
+                let tile_base = tile as u16 * 16;
+                let tile_row = pixel_row % 8;
+                let lo = self.vram[(tile_base + tile_row * 2) as usize];
+                let hi = self.vram[(tile_base + tile_row * 2 + 1) as usize];
+
+                // Iterate the 8 pixel columns of this sprite.
+                for col in 0..8u8 {
+                    let screen_x = sprite.x.wrapping_sub(8).wrapping_add(col) as usize;
+                    if screen_x >= SCREEN_WIDTH {
+                        continue;
+                    }
+
+                    // Bit 7 is leftmost; x-flip reverses the column order.
+                    let bit = if (sprite.attrs & ATTR_X_FLIP) != 0 { col } else { 7 - col };
+                    let color_id = ((hi >> bit) & 1) << 1 | ((lo >> bit) & 1);
+
+                    if color_id == 0 {
+                        continue; // color 0 is always transparent for sprites
+                    }
+                    if (sprite.attrs & ATTR_BG_PRIORITY) != 0 && color_ids[screen_x] != 0 {
+                        continue; // BG/window colors 1–3 win over this sprite
+                    }
+
+                    shades[screen_x] = apply_palette(palette, color_id);
+                }
+            }
+        }
+
+        // Copy final shades into the framebuffer row for this scanline.
         let y = self.ly as usize;
+        self.framebuffer[y * SCREEN_WIDTH..(y + 1) * SCREEN_WIDTH].copy_from_slice(&shades);
+    }
 
-        for x in 0..SCREEN_WIDTH as u8 {
-            let map_x = x.wrapping_add(scroll_x);
-            let tile_col = (map_x / 8) as u16; // which column of tiles in the map
+    /// Collect the (up to 10) sprites that overlap the current scanline.
+    ///
+    /// The hardware scans OAM in index order and takes the first 10 hits.
+    /// Sprites are returned sorted for draw order: lowest priority last so
+    /// the final iteration leaves the highest-priority pixel on top.
+    ///
+    /// Priority rule: lower OAM X wins; ties broken by lower OAM index.
+    /// Sorting descending by (X, oam_idx) puts the lowest-priority sprite
+    /// first — each successive draw overwrites it, so the last-drawn
+    /// (lowest X, lowest oam_idx) sprite wins.
+    fn scan_oam_for_scanline(&self) -> Vec<Sprite> {
+        let sprite_height: u8 = if (self.lcd_control & LCDC_OBJ_SIZE) != 0 { 16 } else { 8 };
+        let ly = self.ly;
 
-            // The tile map is 32 tiles wide; each entry is one byte (tile ID).
-            let tile_id = self.vram[(map_base + tile_row * 32 + tile_col) as usize];
+        let mut sprites: Vec<Sprite> = self
+            .oam
+            .chunks_exact(4)
+            .enumerate()
+            .filter_map(|(i, entry)| {
+                let (y, x, tile, attrs) = (entry[0], entry[1], entry[2], entry[3]);
+                // Sprite covers scanline ly when: 0 ≤ (ly + 16 − y) < height.
+                // Wrapping subtraction gives a value ≥ height for non-overlapping
+                // sprites (wrapping around u8 produces a large number).
+                let row_within = ly.wrapping_add(16).wrapping_sub(y);
+                if row_within < sprite_height {
+                    Some(Sprite { y, x, tile, attrs, oam_idx: i as u8 })
+                } else {
+                    None
+                }
+            })
+            .take(10)
+            .collect();
 
-            // Each tile is 16 bytes (2 bytes × 8 pixel rows).
-            let tile_base = self.tile_data_offset(tile_id);
-            let lo = self.vram[(tile_base + pixel_row * 2) as usize];
-            let hi = self.vram[(tile_base + pixel_row * 2 + 1) as usize];
-
-            // Within each byte, bit 7 is the leftmost pixel.
-            let bit = 7 - (map_x % 8);
-            let color_id = ((hi >> bit) & 1) << 1 | ((lo >> bit) & 1);
-
-            // Each borrow ends before the next begins; framebuffer and vram
-            // are separate fields so the write does not conflict with the reads.
-            self.framebuffer[y * SCREEN_WIDTH + x as usize] = apply_palette(bg_palette, color_id);
-        }
+        // Descending by (X, oam_idx): lowest priority first, highest priority last.
+        sprites.sort_by(|a, b| b.x.cmp(&a.x).then(b.oam_idx.cmp(&a.oam_idx)));
+        sprites
     }
 
     /// VRAM byte offset of the active background tile map.
@@ -349,6 +485,9 @@ impl PPU {
             0x1800
         }
     }
+
+    /// Placeholder for the window layer; replaced in Phase 5 commit 3.
+    fn render_window_scanline(&mut self, _color_ids: &mut [u8; SCREEN_WIDTH], _shades: &mut [u8; SCREEN_WIDTH]) {}
 
     /// VRAM byte offset of the first byte of tile data for `tile_id`.
     ///
