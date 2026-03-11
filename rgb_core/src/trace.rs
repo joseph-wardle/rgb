@@ -183,12 +183,11 @@ impl CPU {
 impl DMG {
     #[inline(always)]
     #[cfg(feature = "trace")]
-    pub(crate) fn log_power_on(&self, kind: &'static str) {
+    pub(crate) fn log_power_on(&self) {
         let cpu = self.cpu();
         let regs = cpu.registers();
         debug!(
             target: "gb::dmg",
-            boot = kind,
             pc = %hex16!(regs.pc),
             ime = cpu.ime,
             halt = ?cpu.halt_state,
@@ -198,7 +197,7 @@ impl DMG {
 
     #[inline(always)]
     #[cfg(not(feature = "trace"))]
-    pub(crate) fn log_power_on(&self, _kind: &'static str) {}
+    pub(crate) fn log_power_on(&self) {}
 
     #[inline(always)]
     #[cfg(feature = "trace")]

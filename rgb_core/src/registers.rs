@@ -21,25 +21,15 @@ pub struct Registers {
 }
 
 impl Registers {
+    /// Register state after the DMG boot ROM completes. The emulator always
+    /// starts here because boot ROM emulation is not yet implemented.
+    ///
+    /// Values taken from Pan Docs § "Power Up Sequence":
+    /// A=01 F=B0 B=00 C=13 D=00 E=D8 H=01 L=4D SP=FFFE PC=0100
     pub(crate) fn new() -> Self {
         Self {
             a: 0x01,
-            b: 0x00,
-            c: 0x13,
-            d: 0x00,
-            e: 0xD8,
-            h: 0x01,
-            l: 0x4D,
-            f: 0xB0,
-            pc: 0x0100,
-            sp: 0xFFFE,
-        }
-    }
-
-    pub(crate) fn new_post_bios() -> Self {
-        Self {
-            a: 0x01,
-            f: 0xB0, // ZNHC flags = 0b1100
+            f: 0xB0, // Z=1 N=0 H=1 C=1
             b: 0x00,
             c: 0x13,
             d: 0x00,

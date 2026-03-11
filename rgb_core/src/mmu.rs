@@ -51,9 +51,8 @@ pub(crate) struct MMU {
     devices: Devices,
     interrupts: Interrupts,
 
-    hram: [u8; 0x7F],   // High RAM
-    wram: [u8; 0x8000], // Work RAM
-    wram_bank: u8,      // Work RAM bank selector
+    hram: [u8; 0x7F],   // High RAM (0xFF80-0xFFFE)
+    wram: [u8; 0x2000], // Work RAM: 8 KiB, two fixed 4 KiB banks (DMG has no banking)
 }
 
 #[expect(clippy::upper_case_acronyms)]
@@ -72,8 +71,7 @@ impl MMU {
             devices: Devices::new(cartridge),
             interrupts: Interrupts::new(),
             hram: [0x00; 0x7F],
-            wram: [0x00; 0x8000],
-            wram_bank: 1,
+            wram: [0x00; 0x2000],
         }
     }
 
@@ -107,31 +105,14 @@ impl MMU {
     }
 
     fn read_wram(&self, address: u16) -> u8 {
-        match address {
-            0xC000..=0xCFFF => self.wram[address as usize - 0xC000],
-            0xD000..=0xDFFF => {
-                self.wram[address as usize - 0xD000 + 0x1000 * self.wram_bank as usize]
-            }
-            0xE000..=0xEFFF => self.wram[address as usize - 0xE000],
-            0xF000..=0xFDFF => {
-                self.wram[address as usize - 0xF000 + 0x1000 * self.wram_bank as usize]
-            }
-            _ => unreachable!("Invalid WRAM address: 0x{:04X}", address),
-        }
+        // The DMG has 8 KiB of WRAM with two fixed 4 KiB banks. Echo RAM
+        // (0xE000-0xFDFF) mirrors the same 8 KiB. Masking the low 13 bits
+        // maps all four address ranges directly into the array.
+        self.wram[(address & 0x1FFF) as usize]
     }
 
     fn write_wram(&mut self, address: u16, value: u8) {
-        match address {
-            0xC000..=0xCFFF => self.wram[address as usize - 0xC000] = value,
-            0xD000..=0xDFFF => {
-                self.wram[address as usize - 0xD000 + 0x1000 * self.wram_bank as usize] = value
-            }
-            0xE000..=0xEFFF => self.wram[address as usize - 0xE000] = value,
-            0xF000..=0xFDFF => {
-                self.wram[address as usize - 0xF000 + 0x1000 * self.wram_bank as usize] = value
-            }
-            _ => unreachable!("Invalid WRAM address: 0x{:04X}", address),
-        }
+        self.wram[(address & 0x1FFF) as usize] = value;
     }
 
     fn read_io(&self, address: u16) -> u8 {
@@ -166,14 +147,8 @@ impl MMU {
             0xFF05 => self.devices.timer.tima = value,
             0xFF06 => self.devices.timer.tma = value,
             0xFF07 => self.devices.timer.tac = value,
-            0xFF0F => {
-                eprintln!("IF write {:02X}", value);
-                self.interrupts.flag = value;
-            }
-            0xFFFF => {
-                eprintln!("IE write {:02X}", value);
-                self.interrupts.enable = value;
-            }
+            0xFF0F => self.interrupts.flag = value,
+            0xFFFF => self.interrupts.enable = value,
             0xFF10..=0xFF3F => self.devices.apu.write_byte(address, value),
             0xFF40..=0xFF4B => self.devices.ppu.write_byte(address, value),
             _ => (),
@@ -211,5 +186,9 @@ impl MemoryBus for MMU {}
 impl MMU {
     pub(crate) fn serial(&self) -> &Serial {
         &self.devices.serial
+    }
+
+    pub(crate) fn framebuffer(&self) -> &[u8] {
+        self.devices.ppu.framebuffer()
     }
 }
