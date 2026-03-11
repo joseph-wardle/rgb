@@ -11,10 +11,22 @@
 //! During VBlank (scanlines 144–153) the PPU remains in Mode 1 for the
 //! entire scanline. One full frame is 70,224 dots (~59.7 fps).
 //!
-//! This module implements the timing state machine: the LY counter, dot
-//! counter, mode transitions, and VBlank/STAT interrupt generation. The
-//! pixel pipeline is not yet implemented; the framebuffer reads all-zero
-//! until Phase 3.
+//! # What is implemented
+//!
+//! **Timing state machine** (Phase 2): LY counter, dot counter, mode
+//! transitions, VBlank and STAT interrupt generation.
+//!
+//! **Background rendering** (Phase 3): tile data fetch, tile map lookup,
+//! SCX/SCY viewport scroll, BGP palette application. Each scanline is
+//! rendered in batch at the Drawing→HBlank transition. The output is a
+//! `[u8; 160×144]` framebuffer of shade indices 0–3.
+//!
+//! # What is not yet implemented
+//!
+//! - Sprites / OBJ layer (Phase 5)
+//! - Window layer (Phase 5)
+//! - OAM DMA (Phase 5)
+//! - Mode 3 variable-length timing from SCX/sprite/window penalties (Phase 5)
 
 use crate::memory::Memory;
 
@@ -43,10 +55,10 @@ const TOTAL_SCANLINES: u8 = 154;
 /// visible scanline to build the list of sprites that appear on this line.
 const OAM_SCAN_DOTS: u16 = 80;
 
-/// Mode 3 (Drawing): pixel pipeline runs for at least 172 dots.
-/// The actual length grows with SCX scroll, sprite hits, and window
-/// activation — modeled in Phase 3. Mode 0 (HBlank) fills the remainder:
-///   456 − 80 − 172 = 204 dots minimum.
+/// Mode 3 (Drawing): the pixel pipeline runs for at least 172 dots.
+/// The actual length grows with SCX fine-scroll, sprite hits, and window
+/// activation (not yet modeled; see Phase 5). Mode 0 (HBlank) fills the
+/// remainder: 456 − 80 − 172 = 204 dots minimum.
 const DRAWING_DOTS: u16 = 172;
 
 // ---------------------------------------------------------------------------
@@ -55,6 +67,9 @@ const DRAWING_DOTS: u16 = 172;
 
 // LCDC (FF40)
 const LCDC_LCD_ENABLE: u8 = 1 << 7; // bit 7: LCD and PPU on/off
+const LCDC_BG_MAP:     u8 = 1 << 3; // bit 3: BG tile map — 0 = 0x9800, 1 = 0x9C00
+const LCDC_TILE_DATA:  u8 = 1 << 4; // bit 4: tile data  — 0 = 0x8800 signed, 1 = 0x8000 unsigned
+const LCDC_BG_ENABLE:  u8 = 1 << 0; // bit 0: 0 = BG is blank (white) on DMG
 
 // STAT (FF41) — interrupt-enable bits (read/write by the CPU)
 const STAT_LYC_INT:    u8 = 1 << 6; // fire STAT interrupt when LYC=LY
@@ -126,7 +141,8 @@ pub(crate) struct PPU {
     stat_line: bool,
 
     // Output framebuffer: one byte per pixel, value 0–3 (DMG shade index).
-    // Populated by the pixel pipeline (Phase 3); all-zero until then.
+    // 0 = white, 1 = light gray, 2 = dark gray, 3 = black.
+    // The frontend maps these indices to actual colors at display time.
     framebuffer: [u8; SCREEN_WIDTH * SCREEN_HEIGHT],
 }
 
@@ -187,11 +203,22 @@ impl PPU {
             self.ly = (self.ly + 1) % TOTAL_SCANLINES;
         }
 
+        let prev_mode = self.mode;
         self.update_stat_and_interrupts(interrupt_flag);
+
+        // Render the background layer when Mode 3 ends. On hardware, the
+        // pixel pipeline pushes pixels one-by-one throughout Mode 3; here
+        // we produce the whole scanline at once at the boundary. This is
+        // accurate for games that do not scroll mid-scanline (Phase 5
+        // introduces a per-dot fetcher for sprite interleaving and fine
+        // scroll penalties).
+        if prev_mode == Mode::Drawing && self.mode == Mode::HBlank {
+            self.render_scanline();
+        }
     }
 
     // -----------------------------------------------------------------------
-    // Private helpers
+    // Timing helpers (Phase 2)
     // -----------------------------------------------------------------------
 
     fn lcd_enabled(&self) -> bool {
@@ -264,6 +291,106 @@ impl PPU {
             || (self.mode == Mode::OamScan && (self.lcd_status & STAT_OAM_INT)    != 0)
             || (lyc_match                  && (self.lcd_status & STAT_LYC_INT)    != 0)
     }
+
+    // -----------------------------------------------------------------------
+    // Background rendering (Phase 3)
+    // -----------------------------------------------------------------------
+
+    /// Render the current scanline (`self.ly`) into the framebuffer.
+    ///
+    /// Called once per visible scanline, at the Drawing→HBlank boundary.
+    fn render_scanline(&mut self) {
+        if (self.lcd_control & LCDC_BG_ENABLE) == 0 {
+            // LCDC bit 0 clear: background is forced blank (white = shade 0).
+            let y = self.ly as usize;
+            self.framebuffer[y * SCREEN_WIDTH..(y + 1) * SCREEN_WIDTH].fill(0);
+            return;
+        }
+
+        // Precompute scanline-level values once before the per-pixel loop.
+        let map_base  = self.bg_tile_map_base();
+        let map_y     = self.ly.wrapping_add(self.scroll_y);
+        let tile_row  = (map_y / 8) as u16; // which row of tiles in the map
+        let pixel_row = (map_y % 8) as u16; // which pixel row within the tile
+        let scroll_x  = self.scroll_x;
+        let bg_palette = self.bg_palette;
+        let y          = self.ly as usize;
+
+        for x in 0..SCREEN_WIDTH as u8 {
+            let map_x    = x.wrapping_add(scroll_x);
+            let tile_col = (map_x / 8) as u16; // which column of tiles in the map
+
+            // The tile map is 32 tiles wide; each entry is one byte (tile ID).
+            let tile_id   = self.vram[(map_base + tile_row * 32 + tile_col) as usize];
+
+            // Each tile is 16 bytes (2 bytes × 8 pixel rows).
+            let tile_base = self.tile_data_offset(tile_id);
+            let lo = self.vram[(tile_base + pixel_row * 2)     as usize];
+            let hi = self.vram[(tile_base + pixel_row * 2 + 1) as usize];
+
+            // Within each byte, bit 7 is the leftmost pixel.
+            let bit      = 7 - (map_x % 8);
+            let color_id = ((hi >> bit) & 1) << 1 | ((lo >> bit) & 1);
+
+            // Each borrow ends before the next begins; framebuffer and vram
+            // are separate fields so the write does not conflict with the reads.
+            self.framebuffer[y * SCREEN_WIDTH + x as usize] = apply_palette(bg_palette, color_id);
+        }
+    }
+
+    /// VRAM byte offset of the active background tile map.
+    ///
+    /// LCDC bit 3 selects between the two 32×32 tile maps:
+    ///   0 → map at 0x9800 (VRAM offset 0x1800)
+    ///   1 → map at 0x9C00 (VRAM offset 0x1C00)
+    fn bg_tile_map_base(&self) -> u16 {
+        if (self.lcd_control & LCDC_BG_MAP) != 0 { 0x1C00 } else { 0x1800 }
+    }
+
+    /// VRAM byte offset of the first byte of tile data for `tile_id`.
+    ///
+    /// LCDC bit 4 selects the addressing mode:
+    ///
+    ///   **0x8000 method** (bit 4 = 1): tile_id is an unsigned index (0–255).
+    ///   Each tile is 16 bytes; tile 0 starts at VRAM offset 0x0000.
+    ///
+    ///   **0x8800 method** (bit 4 = 0): tile_id is a signed offset (−128–127).
+    ///   The base pointer is 0x9000 (VRAM offset 0x1000). Tile IDs 0–127
+    ///   land in block 2 (0x9000–0x97FF); IDs 128–255 (i.e. −128 to −1)
+    ///   land in block 1 (0x8800–0x8FFF).
+    fn tile_data_offset(&self, tile_id: u8) -> u16 {
+        if (self.lcd_control & LCDC_TILE_DATA) != 0 {
+            // 0x8000 method: unsigned, base at VRAM offset 0x0000.
+            tile_id as u16 * 16
+        } else {
+            // 0x8800 method: signed, base at VRAM offset 0x1000.
+            let signed_id = tile_id as i8 as i16;
+            (0x1000 + signed_id * 16) as u16
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Palette lookup
+// ---------------------------------------------------------------------------
+
+/// Extract a DMG shade (0–3) from a palette register for the given color index.
+///
+/// DMG palette registers (BGP, OBP0, OBP1) pack four 2-bit shade values, one
+/// per color index:
+///
+///   bits 7–6 → shade for color index 3
+///   bits 5–4 → shade for color index 2
+///   bits 3–2 → shade for color index 1
+///   bits 1–0 → shade for color index 0
+///
+/// Shades: 0 = white, 1 = light gray, 2 = dark gray, 3 = black.
+///
+/// This function is used for BGP now and will be reused for OBP0/OBP1 in
+/// Phase 5 (sprite rendering). For sprites, color index 0 is transparent and
+/// the caller must check for it before calling this function.
+fn apply_palette(palette: u8, color_id: u8) -> u8 {
+    (palette >> (color_id * 2)) & 0b11
 }
 
 // ---------------------------------------------------------------------------
