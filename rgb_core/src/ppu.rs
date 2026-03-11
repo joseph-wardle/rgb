@@ -25,7 +25,6 @@
 //!
 //! - Sprites / OBJ layer (Phase 5)
 //! - Window layer (Phase 5)
-//! - OAM DMA (Phase 5)
 //! - Mode 3 variable-length timing from SCX/sprite/window penalties (Phase 5)
 
 use crate::memory::Memory;
@@ -122,7 +121,7 @@ pub(crate) struct PPU {
     lyc: u8,      // LYC (FF45): LY compare — triggers STAT interrupt when LY==LYC
 
     // DMA and palettes
-    dma: u8,          // DMA  (FF46): initiates OAM DMA transfer (not yet modeled)
+    dma: u8,          // DMA  (FF46): last value written; actual transfer handled by MMU
     bg_palette: u8,   // BGP  (FF47): background palette data
     obj_palette0: u8, // OBP0 (FF48): sprite palette 0
     obj_palette1: u8, // OBP1 (FF49): sprite palette 1
