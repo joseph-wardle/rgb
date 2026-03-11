@@ -117,7 +117,7 @@ impl MMU {
 
     fn read_io(&self, address: u16) -> u8 {
         let value = match address {
-            0xFF00 => self.devices.joypad.state,
+            0xFF00 => self.devices.joypad.read(),
             0xFF01 => self.devices.serial.sb,
             0xFF02 => self.devices.serial.sc,
             0xFF04 => self.devices.timer.div,
