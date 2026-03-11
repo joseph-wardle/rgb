@@ -166,14 +166,8 @@ impl MMU {
             0xFF05 => self.devices.timer.tima = value,
             0xFF06 => self.devices.timer.tma = value,
             0xFF07 => self.devices.timer.tac = value,
-            0xFF0F => {
-                eprintln!("IF write {:02X}", value);
-                self.interrupts.flag = value;
-            }
-            0xFFFF => {
-                eprintln!("IE write {:02X}", value);
-                self.interrupts.enable = value;
-            }
+            0xFF0F => self.interrupts.flag = value,
+            0xFFFF => self.interrupts.enable = value,
             0xFF10..=0xFF3F => self.devices.apu.write_byte(address, value),
             0xFF40..=0xFF4B => self.devices.ppu.write_byte(address, value),
             _ => (),

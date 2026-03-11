@@ -661,8 +661,6 @@ impl CPU {
     fn trigger_halt_bug(&mut self) {
         self.halt_bug = true;
         self.log_halt_bug();
-        #[cfg(debug_assertions)]
-        eprintln!("HALT bug triggered");
     }
 
     pub(crate) fn step(&mut self, mmu: &mut impl MemoryBus) -> u8 {
@@ -673,20 +671,7 @@ impl CPU {
         }
 
         let pc_before = self.reg.pc;
-        #[cfg(debug_assertions)]
-        let bug_active = self.halt_bug;
         let opcode = self.fetch_byte(mmu);
-        #[cfg(debug_assertions)]
-        if bug_active {
-            eprintln!(
-                "HALT bug fetch pc={:04X} opcode={:02X} bytes={:02X} {:02X} {:02X}",
-                pc_before,
-                opcode,
-                mmu.read_byte(pc_before),
-                mmu.read_byte(pc_before.wrapping_add(1)),
-                mmu.read_byte(pc_before.wrapping_add(2))
-            );
-        }
 
         self.log_inst_start(pc_before, opcode);
 
@@ -694,33 +679,6 @@ impl CPU {
         let total = cycles.total();
 
         self.log_inst_done(opcode, total, cycles.took_conditional);
-
-        #[cfg(debug_assertions)]
-        if pc_before == 0xC08B {
-            eprintln!(
-                "HALT bug exec pc_before={:04X} opcode={:02X} pc_after(before restore)={:04X} DE={:04X}",
-                pc_before,
-                opcode,
-                self.reg.pc,
-                self.reg.get_de()
-            );
-        }
-        #[cfg(debug_assertions)]
-        if pc_before == 0xC818 {
-            let hl = self.reg.get_hl();
-            eprintln!(
-                "PC=C818 opcode={:02X} imm={:02X} A={:02X} B={:02X} C={:02X} D={:02X} E={:02X} HL={:04X} [HL]={:02X}",
-                opcode,
-                mmu.read_byte(pc_before.wrapping_add(1)),
-                self.reg.a,
-                self.reg.b,
-                self.reg.c,
-                self.reg.d,
-                self.reg.e,
-                hl,
-                mmu.read_byte(hl)
-            );
-        }
 
         self.clock.record(total);
         self.advance_ime_schedule();
@@ -998,10 +956,7 @@ impl CPU {
 
             // HALT
             0x76 => {
-                let pending = self.pending_interrupt_mask(mmu);
-                #[cfg(debug_assertions)]
-                eprintln!("HALT executed: ime={} pending={:02X}", self.ime, pending);
-                if !self.ime && pending != 0 {
+                if !self.ime && self.pending_interrupt_mask(mmu) != 0 {
                     self.trigger_halt_bug();
                 } else {
                     self.enter_halt_mode();
@@ -1763,8 +1718,6 @@ impl CPU {
                 if self.interrupts_pending(mmu) {
                     if !self.ime {
                         self.trigger_halt_bug();
-                        #[cfg(debug_assertions)]
-                        eprintln!("HALT bug triggered (woken from HALT)");
                     }
                     self.halt_state = HaltState::Running;
                     self.log_halt_wake();

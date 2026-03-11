@@ -59,11 +59,6 @@ impl PPU {
         self.cycle_counter = self.cycle_counter.wrapping_add(cycles as u32);
         if self.cycle_counter >= CYCLES_PER_FRAME {
             self.cycle_counter -= CYCLES_PER_FRAME;
-            #[cfg(debug_assertions)]
-            eprintln!(
-                "PPU VBlank: setting IF bit. Previous IF: {:02X}",
-                *interrupt_flag
-            );
             *interrupt_flag |= 0x01; // VBlank interrupt
         }
     }
