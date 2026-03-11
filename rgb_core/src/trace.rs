@@ -1,6 +1,6 @@
 use crate::cpu::CPU;
 use crate::gameboy::DMG;
-use crate::input::{Button, Joypad};
+use crate::input::Joypad;
 use crate::mmu::MMU;
 use crate::serial::Serial;
 
@@ -460,65 +460,17 @@ impl Serial {
 impl Joypad {
     #[inline(always)]
     #[cfg(feature = "trace")]
-    pub(crate) fn log_select_updated(
-        &self,
-        previous: u8,
-        current: u8,
-        written: u8,
-        buttons_selected: bool,
-        dpad_selected: bool,
-    ) {
+    pub(crate) fn log_select_updated(&self, previous: u8, current: u8, written: u8) {
         trace!(
             target: "gb::joypad",
-            write = %hex8!(written),
+            write    = %hex8!(written),
             previous = %hex8!(previous),
-            state = %hex8!(current),
-            buttons_selected = buttons_selected,
-            dpad_selected = dpad_selected,
+            state    = %hex8!(current),
             "select.write"
         );
     }
 
     #[inline(always)]
     #[cfg(not(feature = "trace"))]
-    pub(crate) fn log_select_updated(
-        &self,
-        _previous: u8,
-        _current: u8,
-        _written: u8,
-        _buttons_selected: bool,
-        _dpad_selected: bool,
-    ) {
-    }
-
-    #[inline(always)]
-    #[cfg(feature = "trace")]
-    pub(crate) fn log_button_query(&self, button: Button, pressed: bool) {
-        trace!(
-            target: "gb::joypad",
-            button = Self::button_name(button),
-            pressed = pressed,
-            state = %hex8!(self.state),
-            "query"
-        );
-    }
-
-    #[inline(always)]
-    #[cfg(not(feature = "trace"))]
-    pub(crate) fn log_button_query(&self, _button: Button, _pressed: bool) {}
-
-    #[inline(always)]
-    #[cfg(feature = "trace")]
-    fn button_name(button: Button) -> &'static str {
-        match button {
-            Button::Start => "Start",
-            Button::Select => "Select",
-            Button::B => "B",
-            Button::A => "A",
-            Button::Down => "Down",
-            Button::Up => "Up",
-            Button::Left => "Left",
-            Button::Right => "Right",
-        }
-    }
+    pub(crate) fn log_select_updated(&self, _previous: u8, _current: u8, _written: u8) {}
 }

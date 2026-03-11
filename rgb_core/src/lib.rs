@@ -3,6 +3,7 @@ pub mod gameboy;
 pub mod memory;
 
 pub use cpu::CPU;
+pub use input::Button;
 pub use ppu::{SCREEN_HEIGHT, SCREEN_WIDTH};
 pub use registers::Registers;
 pub use serial::Serial;

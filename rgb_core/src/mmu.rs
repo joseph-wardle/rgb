@@ -1,6 +1,6 @@
 use crate::apu::APU;
 use crate::cartridge::Cartridge;
-use crate::input::Joypad;
+use crate::input::{Button, Joypad};
 use crate::memory::{Memory, MemoryBus};
 use crate::ppu::PPU;
 use crate::serial::Serial;
@@ -117,7 +117,7 @@ impl MMU {
 
     fn read_io(&self, address: u16) -> u8 {
         let value = match address {
-            0xFF00 => self.devices.joypad.state,
+            0xFF00 => self.devices.joypad.read(),
             0xFF01 => self.devices.serial.sb,
             0xFF02 => self.devices.serial.sc,
             0xFF04 => self.devices.timer.div,
@@ -190,5 +190,20 @@ impl MMU {
 
     pub(crate) fn framebuffer(&self) -> &[u8] {
         self.devices.ppu.framebuffer()
+    }
+
+    /// Forward a button press from the host to the joypad. Sets the
+    /// joypad interrupt flag (IF bit 4) if the button's row is currently
+    /// selected and the button was previously released.
+    pub(crate) fn press_button(&mut self, button: Button) {
+        if self.devices.joypad.press(button) {
+            self.interrupts.flag |= 0x10; // IF bit 4: joypad interrupt
+        }
+    }
+
+    /// Forward a button release from the host to the joypad.
+    /// No interrupt fires on release.
+    pub(crate) fn release_button(&mut self, button: Button) {
+        self.devices.joypad.release(button);
     }
 }
