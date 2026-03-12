@@ -36,6 +36,8 @@
 //!
 //! - Mode 3 variable-length timing from SCX/sprite/window penalties
 
+use std::cell::Cell;
+
 use crate::memory::Memory;
 
 // ---------------------------------------------------------------------------
@@ -120,6 +122,27 @@ enum Mode {
 }
 
 // ---------------------------------------------------------------------------
+// OAM corruption (Mode 2)
+// ---------------------------------------------------------------------------
+
+/// The OAM corruption pattern triggered by a CPU bus access during Mode 2.
+///
+/// On DMG hardware, certain CPU instructions accidentally drive an OAM-range
+/// address on the external address bus while the PPU is scanning OAM.  This
+/// confuses the PPU's OAM arbiter and corrupts the row it is currently reading.
+///
+/// `Read`  — triggered by a CPU read from the OAM address range (0xFE00–0xFE9F).
+/// `Write` — triggered by a CPU write to the OAM address range.
+///
+/// A third "combined read+write" pattern exists for instructions that access
+/// OAM twice (e.g. PUSH causes a write while the IDU also drives a read address),
+/// but it is not yet modelled here.
+enum OamCorruptionKind {
+    Read,
+    Write,
+}
+
+// ---------------------------------------------------------------------------
 // Sprite (OBJ)
 // ---------------------------------------------------------------------------
 
@@ -191,6 +214,15 @@ pub(crate) struct PPU {
     // 0 = white, 1 = light gray, 2 = dark gray, 3 = black.
     // The frontend maps these indices to actual colors at display time.
     framebuffer: [u8; SCREEN_WIDTH * SCREEN_HEIGHT],
+
+    // OAM corruption state.
+    //
+    // When the CPU reads from OAM during Mode 2, the PPU's OAM arbiter is
+    // confused and corrupts the row it is currently reading.  Because
+    // `read_byte` takes `&self`, we record the pending corruption here via
+    // `Cell` and commit it at the start of the next `step` call (which
+    // takes `&mut self`), where the dot position is still correct.
+    oam_cpu_read_pending: Cell<bool>,
 }
 
 impl Default for PPU {
@@ -221,6 +253,7 @@ impl PPU {
             mode: Mode::OamScan, // (ly=0, dot=0) → Mode 2 per timing table
             stat_line: false,
             framebuffer: [0; SCREEN_WIDTH * SCREEN_HEIGHT],
+            oam_cpu_read_pending: Cell::new(false),
         }
     }
 
@@ -230,6 +263,57 @@ impl PPU {
     /// can write to OAM at any time — even during Mode 2 or Mode 3.
     pub(crate) fn write_oam_direct(&mut self, offset: usize, value: u8) {
         self.oam[offset] = value;
+    }
+
+    // -----------------------------------------------------------------------
+    // OAM corruption (Mode 2)
+    // -----------------------------------------------------------------------
+
+    /// Apply OAM corruption for the row the PPU is currently scanning.
+    ///
+    /// During Mode 2 (OAM scan) the PPU reads one 8-byte row per M-cycle.
+    /// At dot `D` the current row is `D / 4` (rows 0–19).  Row 0 is immune;
+    /// rows 1–19 are corrupted by the formula appropriate to `kind`.
+    ///
+    /// Variable names follow the Pan Docs notation for the corruption formulas:
+    ///
+    /// ```text
+    ///   a  = word 0 of row N     (OAM bytes N×8 .. N×8+2)
+    ///   b  = word 0 of row N−1  (OAM bytes (N−1)×8 .. (N−1)×8+2)
+    ///   c  = word 2 of row N−1  (OAM bytes (N−1)×8+4 .. (N−1)×8+6)
+    /// ```
+    ///
+    /// **Read corruption:** only word 0 of row N is changed: `b | (a & c)`
+    ///
+    /// **Write corruption:** word 0 = `((a ^ c) & (b ^ c)) ^ c`;
+    /// words 1–3 of row N are overwritten with words 1–3 from row N−1.
+    fn corrupt_oam(&mut self, kind: OamCorruptionKind) {
+        let row = (self.dot / 4) as usize;
+        if row == 0 || row > 19 {
+            return; // row 0 is immune; guard against out-of-Mode-2 calls
+        }
+
+        let n = row * 8;       // byte offset of row N in OAM
+        let p = (row - 1) * 8; // byte offset of row N−1 in OAM
+
+        // Read the three 16-bit words used by both formulas.
+        let a = oam_word(&self.oam, n);
+        let b = oam_word(&self.oam, p);
+        let c = oam_word(&self.oam, p + 4);
+
+        match kind {
+            OamCorruptionKind::Read => {
+                // Only word 0 of row N is affected.
+                oam_write_word(&mut self.oam, n, b | (a & c));
+            }
+            OamCorruptionKind::Write => {
+                // Word 0 uses the formula; words 1–3 are replaced with row N−1's words 1–3.
+                oam_write_word(&mut self.oam, n, ((a ^ c) & (b ^ c)) ^ c);
+                // copy_within is safe here: source (p+2..p+8) and dest (n+2..)
+                // are separated by exactly 2 bytes (n = p + 8).
+                self.oam.copy_within(p + 2..p + 8, n + 2);
+            }
+        }
     }
 
     pub(crate) fn framebuffer(&self) -> &[u8] {
@@ -243,11 +327,19 @@ impl PPU {
             // STAT reports Mode 0. On re-enable the PPU restarts from dot 0
             // of line 0. (Real hardware leaves the first frame blank; not
             // modeled here.)
+            self.oam_cpu_read_pending.take(); // clear any stale flag while LCD is off
             self.ly = 0;
             self.dot = 0;
             self.mode = Mode::HBlank;
             self.lcd_status &= !STAT_MODE_MASK; // mode bits → 0 (HBlank)
             return;
+        }
+
+        // Commit any OAM read-corruption flagged during the previous CPU instruction.
+        // (The flag was set via Cell in read_byte; we apply it here where &mut self
+        // is available and the dot position still reflects the access moment.)
+        if self.oam_cpu_read_pending.take() {
+            self.corrupt_oam(OamCorruptionKind::Read);
         }
 
         self.dot += cycles;
@@ -639,6 +731,21 @@ impl PPU {
 }
 
 // ---------------------------------------------------------------------------
+// OAM word helpers
+// ---------------------------------------------------------------------------
+
+/// Read a little-endian 16-bit word from OAM at `offset`.
+fn oam_word(oam: &[u8; 0xA0], offset: usize) -> u16 {
+    oam[offset] as u16 | ((oam[offset + 1] as u16) << 8)
+}
+
+/// Write a little-endian 16-bit word to OAM at `offset`.
+fn oam_write_word(oam: &mut [u8; 0xA0], offset: usize, value: u16) {
+    oam[offset] = value as u8;
+    oam[offset + 1] = (value >> 8) as u8;
+}
+
+// ---------------------------------------------------------------------------
 // Palette lookup
 // ---------------------------------------------------------------------------
 
@@ -676,13 +783,16 @@ impl Memory for PPU {
                 }
             }
             // OAM is locked during Mode 2 (OAM Scan) and Mode 3 (Drawing).
-            0xFE00..=0xFE9F => {
-                if matches!(self.mode, Mode::OamScan | Mode::Drawing) {
+            // During Mode 2 a CPU read also triggers OAM corruption: flag it via
+            // Cell so it can be applied in the next `step` call (&mut self).
+            0xFE00..=0xFE9F => match self.mode {
+                Mode::OamScan => {
+                    self.oam_cpu_read_pending.set(true);
                     0xFF
-                } else {
-                    self.oam[(address - 0xFE00) as usize]
                 }
-            }
+                Mode::Drawing => 0xFF,
+                _ => self.oam[(address - 0xFE00) as usize],
+            },
             0xFF40 => self.lcd_control,
             0xFF41 => self.lcd_status,
             0xFF42 => self.scroll_y,
@@ -707,12 +817,14 @@ impl Memory for PPU {
                     self.vram[(address - 0x8000) as usize] = value;
                 }
             }
-            // OAM is locked during Mode 2 and 3; CPU writes are silently ignored.
-            0xFE00..=0xFE9F => {
-                if !matches!(self.mode, Mode::OamScan | Mode::Drawing) {
-                    self.oam[(address - 0xFE00) as usize] = value;
-                }
-            }
+            // OAM is locked during Mode 2 and 3.  A CPU write during Mode 2
+            // is silently dropped but triggers OAM corruption; Mode 3 drops
+            // the write without corruption.
+            0xFE00..=0xFE9F => match self.mode {
+                Mode::OamScan => self.corrupt_oam(OamCorruptionKind::Write),
+                Mode::Drawing => {}
+                _ => self.oam[(address - 0xFE00) as usize] = value,
+            },
             0xFF40 => self.lcd_control = value,
             0xFF41 => {
                 // Bits 3–6 are writable (interrupt enables). Bits 0–2 are
