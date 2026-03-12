@@ -27,6 +27,11 @@
 //! **Window layer** (Phase 5): second BG plane anchored at (WX−7, WY) with its
 //! own internal line counter and tile map select.
 //!
+//! **VRAM/OAM access restrictions**: the CPU reads 0xFF and writes are
+//! silently dropped when accessing VRAM during Mode 3, or OAM during
+//! Mode 2 or Mode 3 — matching DMG hardware. OAM DMA bypasses this
+//! via [`PPU::write_oam_direct`].
+//!
 //! # What is not yet implemented
 //!
 //! - Mode 3 variable-length timing from SCX/sprite/window penalties
@@ -217,6 +222,14 @@ impl PPU {
             stat_line: false,
             framebuffer: [0; SCREEN_WIDTH * SCREEN_HEIGHT],
         }
+    }
+
+    /// Write directly into OAM, bypassing the mode-based access restriction.
+    ///
+    /// OAM DMA operates on the PPU's internal bus, not the CPU bus, so it
+    /// can write to OAM at any time — even during Mode 2 or Mode 3.
+    pub(crate) fn write_oam_direct(&mut self, offset: usize, value: u8) {
+        self.oam[offset] = value;
     }
 
     pub(crate) fn framebuffer(&self) -> &[u8] {
@@ -655,8 +668,16 @@ fn apply_palette(palette: u8, color_id: u8) -> u8 {
 impl Memory for PPU {
     fn read_byte(&self, address: u16) -> u8 {
         match address {
-            0x8000..=0x9FFF => self.vram[(address - 0x8000) as usize],
-            0xFE00..=0xFE9F => self.oam[(address - 0xFE00) as usize],
+            // VRAM is locked during Mode 3 (Drawing); the CPU bus floats to 0xFF.
+            0x8000..=0x9FFF => {
+                if self.mode == Mode::Drawing { 0xFF }
+                else { self.vram[(address - 0x8000) as usize] }
+            }
+            // OAM is locked during Mode 2 (OAM Scan) and Mode 3 (Drawing).
+            0xFE00..=0xFE9F => {
+                if matches!(self.mode, Mode::OamScan | Mode::Drawing) { 0xFF }
+                else { self.oam[(address - 0xFE00) as usize] }
+            }
             0xFF40 => self.lcd_control,
             0xFF41 => self.lcd_status,
             0xFF42 => self.scroll_y,
@@ -669,14 +690,24 @@ impl Memory for PPU {
             0xFF49 => self.obj_palette1,
             0xFF4A => self.window_y,
             0xFF4B => self.window_x,
-            _ => unreachable!("PPU read: unmapped address {:#06X}", address),
+            _ => 0xFF,
         }
     }
 
     fn write_byte(&mut self, address: u16, value: u8) {
         match address {
-            0x8000..=0x9FFF => self.vram[(address - 0x8000) as usize] = value,
-            0xFE00..=0xFE9F => self.oam[(address - 0xFE00) as usize] = value,
+            // VRAM is locked during Mode 3; CPU writes are silently ignored.
+            0x8000..=0x9FFF => {
+                if self.mode != Mode::Drawing {
+                    self.vram[(address - 0x8000) as usize] = value;
+                }
+            }
+            // OAM is locked during Mode 2 and 3; CPU writes are silently ignored.
+            0xFE00..=0xFE9F => {
+                if !matches!(self.mode, Mode::OamScan | Mode::Drawing) {
+                    self.oam[(address - 0xFE00) as usize] = value;
+                }
+            }
             0xFF40 => self.lcd_control = value,
             0xFF41 => {
                 // Bits 3–6 are writable (interrupt enables). Bits 0–2 are
@@ -696,7 +727,7 @@ impl Memory for PPU {
             0xFF49 => self.obj_palette1 = value,
             0xFF4A => self.window_y = value,
             0xFF4B => self.window_x = value,
-            _ => unreachable!("PPU write: unmapped address {:#06X}", address),
+            _ => {}
         }
     }
 }

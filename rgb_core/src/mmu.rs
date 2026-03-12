@@ -153,13 +153,15 @@ impl MMU {
             0xFF10..=0xFF3F => self.devices.apu.write_byte(address, value),
             0xFF46 => {
                 // OAM DMA: copy 160 bytes from (value × 0x100) into OAM.
-                // On hardware this locks the bus for 160 µs; here we model it
-                // as an instantaneous copy, which is sufficient for games that
-                // wait for the transfer to complete before accessing OAM.
+                // On hardware this locks the CPU bus for 160 µs; here we model
+                // it as an instantaneous copy, which is sufficient for games
+                // that wait for the transfer to complete before accessing OAM.
+                // The DMA uses the PPU's internal bus, bypassing the mode-based
+                // access restriction that applies to the CPU bus.
                 let source = (value as u16) << 8;
                 for i in 0..0xA0u16 {
                     let byte = self.read_byte(source + i);
-                    self.write_byte(0xFE00 + i, byte);
+                    self.devices.ppu.write_oam_direct(i as usize, byte);
                 }
                 self.devices.ppu.write_byte(0xFF46, value); // record for reads
             }
