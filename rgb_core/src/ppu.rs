@@ -265,12 +265,12 @@ impl PPU {
         let prev_mode = self.mode;
         self.update_stat_and_interrupts(interrupt_flag);
 
-        // Render the background layer when Mode 3 ends. On hardware, the
-        // pixel pipeline pushes pixels one-by-one throughout Mode 3; here
-        // we produce the whole scanline at once at the boundary. This is
-        // accurate for games that do not scroll mid-scanline (Phase 5
-        // introduces a per-dot fetcher for sprite interleaving and fine
-        // scroll penalties).
+        // Render the scanline when Mode 3 ends. On hardware, the pixel pipeline
+        // pushes pixels one-by-one throughout Mode 3; here we produce the whole
+        // scanline at once at the Drawing→HBlank boundary. This is accurate for
+        // games that do not scroll mid-scanline or rely on mid-scanline raster
+        // effects (variable Mode 3 length from SCX/sprite/window penalties is
+        // not yet modelled).
         if prev_mode == Mode::Drawing && self.mode == Mode::HBlank {
             self.render_scanline();
         }
@@ -654,9 +654,8 @@ impl PPU {
 ///
 /// Shades: 0 = white, 1 = light gray, 2 = dark gray, 3 = black.
 ///
-/// This function is used for BGP now and will be reused for OBP0/OBP1 in
-/// Phase 5 (sprite rendering). For sprites, color index 0 is transparent and
-/// the caller must check for it before calling this function.
+/// For sprites, color index 0 is transparent; the caller must check for it
+/// before calling this function.
 fn apply_palette(palette: u8, color_id: u8) -> u8 {
     (palette >> (color_id * 2)) & 0b11
 }
