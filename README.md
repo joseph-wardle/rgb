@@ -1,83 +1,76 @@
-# RGB
+# rgb
 
-`rgb` is an educational Game Boy emulator written in Rust. The project’s top priority is clarity: every module should be approachable, easy to read, and serve as a tour through the hardware rather than an exercise in clever abstractions. This is a hobby project, so performance optimizations and feature completeness are not primary concerns.
+`rgb` is an educational Game Boy (DMG) emulator written in Rust.  The top
+priority is clarity: every module should be approachable and serve as a
+readable tour through the hardware rather than an exercise in clever
+abstractions.
 
 ## Project Goals
-- Keep the codebase small, focused, and heavily documented so newcomers can follow along without cross-referencing multiple sources.
-- Mirror the original hardware structure (CPU, MMU, PPU, APU, timers, input) with straightforward APIs and explicit data flow.
-- Provide a friendly study resource by pairing readable implementations with references back to Pan Docs and other community guides.
 
-## Roadmap (High Level)
-- [x] Bootstrap the workspace layout (`rgb_core`, `rgb_cli`) and CI-friendly tooling.
-- [x] Implement the baseline CPU fetch/decode/execute loop with opcode tables and helpers.
-- [ ] Tighten CPU timing, interrupts, and HALT/STOP quirks;
-- [ ] Flesh out the MMU (timers, DMA, IO) with readable docs and per-register tests.
-- [ ] Build an accurate, well-commented PPU pipeline and framebuffer interface.
-- [ ] Implement the four APU channels, frame sequencer, and a simple host audio backend.
-- [ ] Replace the CLI placeholder with a ROM runner, trace/debug toggles, and input handling.
-- [ ] Grow documentation into a guided tour of the hardware and code structure.
+- Keep the codebase small, focused, and documented so newcomers can follow
+  along without cross-referencing multiple sources.
+- Mirror the original hardware structure (CPU, MMU, PPU, APU, timers, input)
+  with straightforward APIs and explicit data flow.
+- Pair readable implementations with references to Pan Docs and community
+  guides.
 
-## MVP Milestone Board (First Pass)
-The board below is the practical path to a full first-pass emulator that is functional top-to-bottom while staying small, readable, and educational.
+## What Works
 
-### M1. Runnable Host Flow (`rgb_cli`)
-- [ ] Replace the placeholder CLI with ROM loading, startup config, and a clear main loop.
-- [ ] Add debug/trace toggles that help learning without cluttering default output.
-- [ ] Ensure errors are user-friendly (bad path, unsupported mapper, invalid ROM, etc.).
+| Component          | Notes                                                     |
+|--------------------|-----------------------------------------------------------|
+| SM83 CPU           | Full instruction set, HALT/STOP, IME, interrupt dispatch  |
+| PPU                | BG, window, sprites, palettes, STAT/VBlank interrupts,   |
+|                    | VRAM/OAM mode-based access restrictions                   |
+| Timer              | DIV/TIMA/TMA/TAC with correct overflow and reload         |
+| APU                | All four channels, frame sequencer, stereo output (cpal)  |
+| OAM DMA            | Instantaneous copy model                                  |
+| Joypad             | Polling model; joypad interrupt                           |
+| MBC1/MBC3/MBC5     | ROM and RAM banking; battery-backed save files            |
+| Boot ROM           | Optional; emulator starts at post-boot state by default   |
 
-### M2. Stable Core API (`rgb_core`)
-- [ ] Define a compact emulator-facing API for stepping and host integration.
-- [ ] Expose clean access points for framebuffer, input updates, and status.
-- [ ] Keep internals private unless they are part of the teaching surface.
+## Known Gaps
 
-### M3. MMU + IO Baseline Correctness
-- [ ] Finalize register defaults and read/write semantics for core IO ranges.
-- [ ] Make unmapped/unused behavior explicit and documented.
-- [ ] Add per-register tests for timer, interrupt, and key LCD/joypad paths.
+- **Mode 3 variable timing**: the pixel pipeline always takes 172 dots;
+  the SCX fine-scroll, sprite, and window penalties are not yet modelled.
+- **TIMA reload glitch**: on hardware, the reload from TMA and the timer
+  interrupt are delayed by one machine cycle after TIMA overflow.
+- **OAM DMA bus lock**: DMA is instantaneous here; the 160-µs CPU-bus
+  lockout is not modelled.
+- **STAT write quirk**: writing to STAT during certain modes can trigger a
+  spurious interrupt on real hardware; not modelled.
 
-### M4. Interrupts + CPU Timing Polish
-- [ ] Tighten IF/IE behavior and interrupt priority/servicing details.
-- [ ] Finish HALT/STOP edge cases and IME scheduling correctness.
-- [ ] Unignore timing-related CPU tests as behavior lands.
+## Building
 
-### M5. Timer Hardware Accuracy
-- [ ] Implement accurate `DIV/TIMA/TMA/TAC` behavior, including tricky edge cases.
-- [ ] Verify overflow/reload timing against reference tests.
-- [ ] Keep timer code heavily commented with hardware rationale.
+```sh
+cargo build --release
+```
 
-### M6. DMA + Memory Timing Integration
-- [ ] Implement OAM DMA transfer flow from `FF46`.
-- [ ] Wire DMA effects into memory accessibility/timing behavior.
-- [ ] Enable relevant timing/OAM test suites once stable.
+**Note for Linux users without ALSA development headers** (common on
+RHEL/CentOS with only `alsa-lib` installed): a shim `pkgconfig/alsa.pc`
+is included so `cargo build` works out of the box.  On Debian/Ubuntu you
+can also install `libasound2-dev` instead.
 
-### M7. PPU Timing State Machine
-- [ ] Implement LY progression, PPU modes, and frame/scanline timing.
-- [ ] Implement VBlank + STAT interrupt behavior (`LYC`, mode interrupts, etc.).
-- [ ] Document the control flow as a hardware walkthrough.
+## Running
 
-### M8. First-Pass Pixel Pipeline + Framebuffer
-- [ ] Render background/window/sprites with correct priority rules for MVP.
-- [ ] Produce a stable framebuffer interface for the host frontend.
-- [ ] Validate with basic visual test ROMs and in-game sanity checks.
+```sh
+cargo run --release -- <rom.gb>
+cargo run --release -- <rom.gb> --boot-rom <dmg_boot.bin>
+```
 
-### M9. Input Path End-to-End
-- [ ] Connect host key input to joypad matrix/select behavior.
-- [ ] Request joypad interrupts correctly on transitions.
-- [ ] Validate with gameplay-level checks (menus, movement, start/select usage).
+Controls: Arrow keys → D-pad, Z → B, X → A, Enter → Start,
+Right Shift → Select, Escape → quit.
 
-### M10. Cartridge Compatibility for Real Games
-- [ ] Keep ROM-only + MBC1 robust.
-- [ ] Add next high-impact mappers (at minimum MBC3 and MBC5) for practical compatibility.
-- [ ] Add battery-backed RAM save/load behavior.
+## Testing
 
-### M11. APU MVP
-- [ ] Implement enough APU register behavior for software expectations.
-- [ ] Add a simple audio output path (or clearly documented temporary mute mode for MVP if needed).
-- [ ] Unignore the first sound tests that become valid.
+The Blargg `cpu_instrs` test suite is used for CPU correctness.  ROMs are
+downloaded automatically on first run (requires internet access) or can be
+pre-placed in `target/blargg-test-roms/`:
 
-### M12. CI, Docs, and MVP Release Cut
-- [ ] Ensure CI runs the intended workspace tests and catches regressions.
-- [ ] Promote ignored suites milestone-by-milestone as features are completed.
-- [ ] Do a final documentation pass and tag the first playable MVP release with known limitations.
+```sh
+cargo test --release -p rgb_core
+```
 
-If you’d like to contribute, aim for changes that keep the learning experience front and centre.
+## Contributing
+
+Aim for changes that keep the learning experience front and centre.  New
+code should explain the hardware, not just implement it.
