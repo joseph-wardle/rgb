@@ -36,8 +36,8 @@ pub struct Mbc1 {
     rom: Vec<u8>,
     ram: Option<Vec<u8>>,
     info: CartridgeInfo,
-    rom_bank_low5: u8,    // lower 5 bits of ROM bank; written to 0x2000–0x3FFF
-    rom_bank_high2: u8,   // upper 2 bits; written to 0x4000–0x5FFF
+    rom_bank_low5: u8,  // lower 5 bits of ROM bank; written to 0x2000–0x3FFF
+    rom_bank_high2: u8, // upper 2 bits; written to 0x4000–0x5FFF
     ram_enabled: bool,
     banking_mode: BankingMode,
 }
@@ -88,7 +88,11 @@ impl Mbc1 {
         };
         let bank = self.wrap_rom(bank);
         // Bank 0 in the upper window maps to bank 1 (hardware quirk).
-        if bank == 0 && self.rom_bank_count() > 1 { 1 } else { bank }
+        if bank == 0 && self.rom_bank_count() > 1 {
+            1
+        } else {
+            bank
+        }
     }
 
     fn current_ram_bank(&self) -> usize {
@@ -183,7 +187,11 @@ impl Cartridge for Mbc1 {
     }
 
     fn save_data(&self) -> Option<&[u8]> {
-        if self.info.battery { self.ram.as_deref() } else { None }
+        if self.info.battery {
+            self.ram.as_deref()
+        } else {
+            None
+        }
     }
 
     fn load_save_data(&mut self, data: &[u8]) {

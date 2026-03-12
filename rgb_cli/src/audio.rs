@@ -35,7 +35,7 @@ impl AudioOutput {
     /// Returns `None` if no audio device is available or the device cannot be
     /// configured — the caller falls back to silent operation in that case.
     pub fn open(sample_rate: u32) -> Option<Self> {
-        let host   = cpal::default_host();
+        let host = cpal::default_host();
         let device = host.default_output_device()?;
         let config = find_config(&device, sample_rate)?;
 
@@ -44,7 +44,10 @@ impl AudioOutput {
         let stream = build_stream(&device, &config, consumer)?;
         stream.play().ok()?;
 
-        Some(Self { producer, _stream: stream })
+        Some(Self {
+            producer,
+            _stream: stream,
+        })
     }
 }
 
@@ -63,15 +66,21 @@ fn find_config(device: &Device, sample_rate: u32) -> Option<StreamConfig> {
 }
 
 /// Build an output stream that drains samples from the ring-buffer consumer.
-fn build_stream(device: &Device, config: &StreamConfig, mut consumer: HeapCons<f32>) -> Option<Stream> {
-    device.build_output_stream(
-        config,
-        move |output: &mut [f32], _| {
-            for sample in output.iter_mut() {
-                *sample = consumer.try_pop().unwrap_or(0.0);
-            }
-        },
-        |err| eprintln!("audio stream error: {err}"),
-        None,
-    ).ok()
+fn build_stream(
+    device: &Device,
+    config: &StreamConfig,
+    mut consumer: HeapCons<f32>,
+) -> Option<Stream> {
+    device
+        .build_output_stream(
+            config,
+            move |output: &mut [f32], _| {
+                for sample in output.iter_mut() {
+                    *sample = consumer.try_pop().unwrap_or(0.0);
+                }
+            },
+            |err| eprintln!("audio stream error: {err}"),
+            None,
+        )
+        .ok()
 }

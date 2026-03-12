@@ -51,10 +51,10 @@ pub(crate) struct MMU {
     devices: Devices,
     interrupts: Interrupts,
 
-    hram: [u8; 0x7F],   // High RAM (0xFF80-0xFFFE)
-    wram: [u8; 0x2000], // Work RAM: 8 KiB, two fixed 4 KiB banks (DMG has no banking)
-    boot_rom: Option<Box<[u8]>>,  // 256-byte boot ROM image; None = skip boot ROM
-    boot_rom_mapped: bool,         // true until the game writes 0xFF50 to unmap it
+    hram: [u8; 0x7F],            // High RAM (0xFF80-0xFFFE)
+    wram: [u8; 0x2000],          // Work RAM: 8 KiB, two fixed 4 KiB banks (DMG has no banking)
+    boot_rom: Option<Box<[u8]>>, // 256-byte boot ROM image; None = skip boot ROM
+    boot_rom_mapped: bool,       // true until the game writes 0xFF50 to unmap it
 }
 
 #[expect(clippy::upper_case_acronyms)]
@@ -186,12 +186,11 @@ impl Memory for MMU {
     fn read_byte(&self, address: u16) -> u8 {
         // When the boot ROM is mapped it shadows cartridge addresses 0x0000–0x00FF.
         // The boot ROM unmaps itself by writing to 0xFF50.
-        if self.boot_rom_mapped {
-            if let Some(ref rom) = self.boot_rom {
-                if (address as usize) < rom.len() {
-                    return rom[address as usize];
-                }
-            }
+        if self.boot_rom_mapped
+            && let Some(ref rom) = self.boot_rom
+            && (address as usize) < rom.len()
+        {
+            return rom[address as usize];
         }
 
         match self.get_memory_region(address) {

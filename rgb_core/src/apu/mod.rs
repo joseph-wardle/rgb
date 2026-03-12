@@ -128,7 +128,6 @@ pub(crate) struct APU {
     pub on: bool,
 
     // --- Timing state ---
-
     /// T-cycle countdown to the next frame-sequencer tick (fires at 512 Hz).
     frame_seq_timer: u32,
     /// Current step of the 8-step frame-sequencer cycle (0–7).
@@ -142,17 +141,17 @@ pub(crate) struct APU {
 impl APU {
     pub(crate) fn new() -> Self {
         Self {
-            ch1:             Channel1::default(),
-            ch2:             Channel2::default(),
-            ch3:             Channel3::default(),
-            ch4:             Channel4::default(),
-            nr50:            0,
-            nr51:            0,
-            on:              false,
+            ch1: Channel1::default(),
+            ch2: Channel2::default(),
+            ch3: Channel3::default(),
+            ch4: Channel4::default(),
+            nr50: 0,
+            nr51: 0,
+            on: false,
             frame_seq_timer: 8192,
-            frame_seq_step:  0,
-            sample_timer:    0.0,
-            samples:         Vec::new(),
+            frame_seq_step: 0,
+            sample_timer: 0.0,
+            samples: Vec::new(),
         }
     }
 
@@ -226,10 +225,18 @@ impl APU {
     }
 
     fn clock_length_counters(&mut self) {
-        if self.ch1.length.clock() { self.ch1.enabled = false; }
-        if self.ch2.length.clock() { self.ch2.enabled = false; }
-        if self.ch3.length.clock() { self.ch3.enabled = false; }
-        if self.ch4.length.clock() { self.ch4.enabled = false; }
+        if self.ch1.length.clock() {
+            self.ch1.enabled = false;
+        }
+        if self.ch2.length.clock() {
+            self.ch2.enabled = false;
+        }
+        if self.ch3.length.clock() {
+            self.ch3.enabled = false;
+        }
+        if self.ch4.length.clock() {
+            self.ch4.enabled = false;
+        }
     }
 
     fn clock_volume_envelopes(&mut self) {
@@ -250,25 +257,41 @@ impl APU {
         let ch4 = self.ch4_dac_output();
 
         // NR50: master volume (0–7) for left (bits 6–4) and right (bits 2–0).
-        let left_vol  = ((self.nr50 >> 4) & 0x07) as f32 / 7.0;
+        let left_vol = ((self.nr50 >> 4) & 0x07) as f32 / 7.0;
         let right_vol = (self.nr50 & 0x07) as f32 / 7.0;
 
         // NR51: which channels are panned to each output.
         // Bit 7/6/5/4 = Ch4/3/2/1 to left; bit 3/2/1/0 = Ch4/3/2/1 to right.
         let left = {
             let mut s = 0.0f32;
-            if self.nr51 & 0x80 != 0 { s += ch4; }
-            if self.nr51 & 0x40 != 0 { s += ch3; }
-            if self.nr51 & 0x20 != 0 { s += ch2; }
-            if self.nr51 & 0x10 != 0 { s += ch1; }
+            if self.nr51 & 0x80 != 0 {
+                s += ch4;
+            }
+            if self.nr51 & 0x40 != 0 {
+                s += ch3;
+            }
+            if self.nr51 & 0x20 != 0 {
+                s += ch2;
+            }
+            if self.nr51 & 0x10 != 0 {
+                s += ch1;
+            }
             s * left_vol / 4.0
         };
         let right = {
             let mut s = 0.0f32;
-            if self.nr51 & 0x08 != 0 { s += ch4; }
-            if self.nr51 & 0x04 != 0 { s += ch3; }
-            if self.nr51 & 0x02 != 0 { s += ch2; }
-            if self.nr51 & 0x01 != 0 { s += ch1; }
+            if self.nr51 & 0x08 != 0 {
+                s += ch4;
+            }
+            if self.nr51 & 0x04 != 0 {
+                s += ch3;
+            }
+            if self.nr51 & 0x02 != 0 {
+                s += ch2;
+            }
+            if self.nr51 & 0x01 != 0 {
+                s += ch1;
+            }
             s * right_vol / 4.0
         };
 
@@ -279,26 +302,34 @@ impl APU {
     // DAC conversion: amplitude 0–15 → float −1.0 to +1.0.
     // When the channel or its DAC is off, the output is 0.0 (DC centre).
     fn ch1_dac_output(&self) -> f32 {
-        if !self.ch1.enabled || !self.ch1.dac_on { return 0.0; }
+        if !self.ch1.enabled || !self.ch1.dac_on {
+            return 0.0;
+        }
         let high = (DUTY_PATTERNS[self.ch1.duty as usize] >> self.ch1.phase) & 1;
-        dac(high as u8 * self.ch1.envelope.volume)
+        dac(high * self.ch1.envelope.volume)
     }
 
     fn ch2_dac_output(&self) -> f32 {
-        if !self.ch2.enabled || !self.ch2.dac_on { return 0.0; }
+        if !self.ch2.enabled || !self.ch2.dac_on {
+            return 0.0;
+        }
         let high = (DUTY_PATTERNS[self.ch2.duty as usize] >> self.ch2.phase) & 1;
-        dac(high as u8 * self.ch2.envelope.volume)
+        dac(high * self.ch2.envelope.volume)
     }
 
     fn ch3_dac_output(&self) -> f32 {
-        if !self.ch3.enabled || !self.ch3.dac_on { return 0.0; }
+        if !self.ch3.enabled || !self.ch3.dac_on {
+            return 0.0;
+        }
         // output_level: 0 = mute (shift 4), 1 = 100% (shift 0), 2 = 50% (shift 1), 3 = 25% (shift 2)
         let shift = [4u8, 0, 1, 2][self.ch3.output_level as usize];
         dac(self.ch3.current_sample() >> shift)
     }
 
     fn ch4_dac_output(&self) -> f32 {
-        if !self.ch4.enabled || !self.ch4.dac_on { return 0.0; }
+        if !self.ch4.enabled || !self.ch4.dac_on {
+            return 0.0;
+        }
         // LFSR bit 0 inverted: 0 → high (volume), 1 → low (silence)
         let high = (self.ch4.lfsr & 1) ^ 1;
         dac(high as u8 * self.ch4.envelope.volume)
@@ -317,10 +348,10 @@ impl APU {
 
     /// Clear all channel and control registers.  Called when NR52 bit 7 → 0.
     fn power_off(&mut self) {
-        self.ch1  = Channel1::default();
-        self.ch2  = Channel2::default();
-        self.ch3  = Channel3::default();
-        self.ch4  = Channel4::default();
+        self.ch1 = Channel1::default();
+        self.ch2 = Channel2::default();
+        self.ch3 = Channel3::default();
+        self.ch4 = Channel4::default();
         self.nr50 = 0;
         self.nr51 = 0;
     }
@@ -347,7 +378,7 @@ impl Memory for APU {
                     | (self.ch3.enabled as u8) << 2
                     | (self.ch2.enabled as u8) << 1
                     | (self.ch1.enabled as u8);
-                (self.on as u8) << 7 | ch_bits | 0x70  // 0x70 = OR mask for NR52
+                (self.on as u8) << 7 | ch_bits | 0x70 // 0x70 = OR mask for NR52
             }
 
             // All other registers read as 0xFF while the APU is off.
@@ -358,8 +389,8 @@ impl Memory for APU {
             0xFF15..=0xFF19 => self.ch2.read(address) | Self::or_mask(address),
             0xFF1A..=0xFF1E => self.ch3.read(address) | Self::or_mask(address),
             0xFF1F..=0xFF23 => self.ch4.read(address) | Self::or_mask(address),
-            0xFF24           => self.nr50,
-            0xFF25           => self.nr51,
+            0xFF24 => self.nr50,
+            0xFF25 => self.nr51,
 
             _ => 0xFF,
         }
@@ -392,8 +423,8 @@ impl Memory for APU {
             0xFF15..=0xFF19 => self.ch2.write(address, value),
             0xFF1A..=0xFF1E => self.ch3.write(address, value),
             0xFF1F..=0xFF23 => self.ch4.write(address, value),
-            0xFF24           => self.nr50 = value,
-            0xFF25           => self.nr51 = value,
+            0xFF24 => self.nr50 = value,
+            0xFF25 => self.nr51 = value,
             _ => {}
         }
     }

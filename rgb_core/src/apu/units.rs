@@ -26,7 +26,7 @@ impl EnvDir {
 /// or `256 − NR31` for Ch3.
 #[derive(Debug, Default)]
 pub struct LengthCounter {
-    pub value:   u16,  // remaining ticks (u16 covers Ch3's 256-step range)
+    pub value: u16,    // remaining ticks (u16 covers Ch3's 256-step range)
     pub enabled: bool, // NRx4 bit 6: stop channel when counter expires
 }
 
@@ -51,11 +51,11 @@ impl LengthCounter {
 /// by ±1 and the timer reloads from `period`.
 #[derive(Debug, Default)]
 pub struct VolumeEnvelope {
-    pub volume:  u8,     // current DAC volume (0–15)
-    pub initial: u8,     // NRx2 bits 4–7: volume loaded on trigger
-    pub dir:     EnvDir, // NRx2 bit 3: Increase or Decrease
-    pub period:  u8,     // NRx2 bits 0–2: envelope period; 0 = frozen
-    pub timer:   u8,     // internal countdown; reloads from period
+    pub volume: u8,  // current DAC volume (0–15)
+    pub initial: u8, // NRx2 bits 4–7: volume loaded on trigger
+    pub dir: EnvDir, // NRx2 bit 3: Increase or Decrease
+    pub period: u8,  // NRx2 bits 0–2: envelope period; 0 = frozen
+    pub timer: u8,   // internal countdown; reloads from period
 }
 
 impl VolumeEnvelope {

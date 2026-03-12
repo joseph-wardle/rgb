@@ -669,13 +669,19 @@ impl Memory for PPU {
         match address {
             // VRAM is locked during Mode 3 (Drawing); the CPU bus floats to 0xFF.
             0x8000..=0x9FFF => {
-                if self.mode == Mode::Drawing { 0xFF }
-                else { self.vram[(address - 0x8000) as usize] }
+                if self.mode == Mode::Drawing {
+                    0xFF
+                } else {
+                    self.vram[(address - 0x8000) as usize]
+                }
             }
             // OAM is locked during Mode 2 (OAM Scan) and Mode 3 (Drawing).
             0xFE00..=0xFE9F => {
-                if matches!(self.mode, Mode::OamScan | Mode::Drawing) { 0xFF }
-                else { self.oam[(address - 0xFE00) as usize] }
+                if matches!(self.mode, Mode::OamScan | Mode::Drawing) {
+                    0xFF
+                } else {
+                    self.oam[(address - 0xFE00) as usize]
+                }
             }
             0xFF40 => self.lcd_control,
             0xFF41 => self.lcd_status,

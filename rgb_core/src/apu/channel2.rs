@@ -18,51 +18,59 @@ use super::units::{EnvDir, LengthCounter, VolumeEnvelope};
 #[derive(Debug, Default)]
 pub struct Channel2 {
     // — Register-backed state —
-    pub duty:     u8,            // NR21 bits 6–7: wave duty (0–3 → 12.5/25/50/75 %)
+    pub duty: u8, // NR21 bits 6–7: wave duty (0–3 → 12.5/25/50/75 %)
     pub envelope: VolumeEnvelope,
-    pub length:   LengthCounter,
-    pub freq:     u16,           // 11-bit: NR23 = bits 0–7, NR24 = bits 8–10
-    pub dac_on:   bool,          // DAC powered when NR22 bits 3–7 are not all zero
+    pub length: LengthCounter,
+    pub freq: u16,    // 11-bit: NR23 = bits 0–7, NR24 = bits 8–10
+    pub dac_on: bool, // DAC powered when NR22 bits 3–7 are not all zero
 
     // — Internal audio state —
-    pub enabled:    bool,
+    pub enabled: bool,
     pub freq_timer: u16, // T-cycle countdown; reloads with (2048 − freq) × 4
-    pub phase:      u8,  // wave position 0–7 in the current duty-cycle table
+    pub phase: u8,       // wave position 0–7 in the current duty-cycle table
 }
 
 impl Channel2 {
     pub fn read(&self, address: u16) -> u8 {
         match address {
-            0xFF15 => 0,                  // unmapped (OR mask 0xFF applied by APU)
-            0xFF16 => self.duty << 6,     // length bits 0–5 are write-only
-            0xFF17 => (self.envelope.initial << 4) | ((self.envelope.dir as u8) << 3) | self.envelope.period,
-            0xFF18 => 0,                  // write-only (OR mask 0xFF applied by APU)
+            0xFF15 => 0,              // unmapped (OR mask 0xFF applied by APU)
+            0xFF16 => self.duty << 6, // length bits 0–5 are write-only
+            0xFF17 => {
+                (self.envelope.initial << 4)
+                    | ((self.envelope.dir as u8) << 3)
+                    | self.envelope.period
+            }
+            0xFF18 => 0, // write-only (OR mask 0xFF applied by APU)
             0xFF19 => (self.length.enabled as u8) << 6,
-            _      => 0,
+            _ => 0,
         }
     }
 
     pub fn write(&mut self, address: u16, value: u8) {
         match address {
-            0xFF15 => {}  // unmapped
+            0xFF15 => {} // unmapped
             0xFF16 => {
-                self.duty         = (value >> 6) & 0x03;
+                self.duty = (value >> 6) & 0x03;
                 self.length.value = 64 - (value & 0x3F) as u16;
             }
             0xFF17 => {
                 self.envelope.initial = (value >> 4) & 0x0F;
-                self.envelope.dir     = EnvDir::from_bit(value & 0x08 != 0);
-                self.envelope.period  = value & 0x07;
-                self.dac_on           = value & 0xF8 != 0;
-                if !self.dac_on { self.enabled = false; }
+                self.envelope.dir = EnvDir::from_bit(value & 0x08 != 0);
+                self.envelope.period = value & 0x07;
+                self.dac_on = value & 0xF8 != 0;
+                if !self.dac_on {
+                    self.enabled = false;
+                }
             }
             0xFF18 => {
                 self.freq = (self.freq & 0x700) | value as u16;
             }
             0xFF19 => {
-                self.freq           = (self.freq & 0x0FF) | (((value & 0x07) as u16) << 8);
+                self.freq = (self.freq & 0x0FF) | (((value & 0x07) as u16) << 8);
                 self.length.enabled = value & 0x40 != 0;
-                if value & 0x80 != 0 { self.trigger(); }
+                if value & 0x80 != 0 {
+                    self.trigger();
+                }
             }
             _ => {}
         }
@@ -80,10 +88,12 @@ impl Channel2 {
     }
 
     fn trigger(&mut self) {
-        self.enabled         = self.dac_on;
-        if self.length.value == 0 { self.length.value = 64; }
-        self.freq_timer      = (2048 - self.freq) * 4;
+        self.enabled = self.dac_on;
+        if self.length.value == 0 {
+            self.length.value = 64;
+        }
+        self.freq_timer = (2048 - self.freq) * 4;
         self.envelope.volume = self.envelope.initial;
-        self.envelope.timer  = self.envelope.period;
+        self.envelope.timer = self.envelope.period;
     }
 }

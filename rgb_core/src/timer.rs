@@ -40,18 +40,25 @@ const TIMA_PERIOD_M_CYCLES: [u16; 4] = [256, 4, 16, 64];
 
 #[derive(Debug, Default)]
 pub(crate) struct Timer {
-    pub(crate) div:  u8, // DIV  (FF04): upper byte of the internal counter; always running
+    pub(crate) div: u8, // DIV  (FF04): upper byte of the internal counter; always running
     pub(crate) tima: u8, // TIMA (FF05): timer counter; increments at TAC-selected rate
-    pub(crate) tma:  u8, // TMA  (FF06): reload value written into TIMA on overflow
-    pub(crate) tac:  u8, // TAC  (FF07): bit 2 = timer enable; bits 0–1 = clock select
+    pub(crate) tma: u8, // TMA  (FF06): reload value written into TIMA on overflow
+    pub(crate) tac: u8, // TAC  (FF07): bit 2 = timer enable; bits 0–1 = clock select
 
-    div_phase:  u16, // T-cycle accumulator for the DIV counter
+    div_phase: u16,  // T-cycle accumulator for the DIV counter
     tima_phase: u16, // T-cycle accumulator for the TIMA counter
 }
 
 impl Timer {
     pub(crate) fn new() -> Self {
-        Timer { div: 0, tima: 0, tma: 0, tac: 0, div_phase: 0, tima_phase: 0 }
+        Timer {
+            div: 0,
+            tima: 0,
+            tma: 0,
+            tac: 0,
+            div_phase: 0,
+            tima_phase: 0,
+        }
     }
 
     pub(crate) fn step(&mut self, cycles: u16, interrupt_flag: &mut u8) {

@@ -18,46 +18,31 @@
 
 use super::units::LengthCounter;
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct Channel3 {
     // — Register-backed state —
-    pub dac_on:       bool,       // NR30 bit 7: powers the DAC
-    pub output_level: u8,         // NR32 bits 5–6: 0=mute, 1=100%, 2=50%, 3=25%
-    pub length:       LengthCounter,
-    pub freq:         u16,        // 11-bit: NR33 = bits 0–7, NR34 = bits 8–10
-    pub wave_ram:     [u8; 16],   // 0xFF30–0xFF3F: 32 packed 4-bit samples
+    pub dac_on: bool,     // NR30 bit 7: powers the DAC
+    pub output_level: u8, // NR32 bits 5–6: 0=mute, 1=100%, 2=50%, 3=25%
+    pub length: LengthCounter,
+    pub freq: u16,          // 11-bit: NR33 = bits 0–7, NR34 = bits 8–10
+    pub wave_ram: [u8; 16], // 0xFF30–0xFF3F: 32 packed 4-bit samples
 
     // — Internal audio state —
-    pub enabled:    bool,
+    pub enabled: bool,
     pub freq_timer: u16, // T-cycle countdown; reloads with (2048 − freq) × 2
-    pub phase:      u8,  // nibble index 0–31 into wave_ram
-}
-
-impl Default for Channel3 {
-    fn default() -> Self {
-        Self {
-            dac_on:       false,
-            output_level: 0,
-            length:       LengthCounter::default(),
-            freq:         0,
-            wave_ram:     [0; 16],
-            enabled:      false,
-            freq_timer:   0,
-            phase:        0,
-        }
-    }
+    pub phase: u8,       // nibble index 0–31 into wave_ram
 }
 
 impl Channel3 {
     pub fn read(&self, address: u16) -> u8 {
         match address {
             0xFF1A => (self.dac_on as u8) << 7, // bits 0–6 unused (OR mask 0x7F by APU)
-            0xFF1B => 0,                         // write-only (OR mask 0xFF by APU)
-            0xFF1C => self.output_level << 5,    // bits 0–4 and 7 unused (OR mask 0x9F)
-            0xFF1D => 0,                         // write-only (OR mask 0xFF by APU)
+            0xFF1B => 0,                        // write-only (OR mask 0xFF by APU)
+            0xFF1C => self.output_level << 5,   // bits 0–4 and 7 unused (OR mask 0x9F)
+            0xFF1D => 0,                        // write-only (OR mask 0xFF by APU)
             0xFF1E => (self.length.enabled as u8) << 6,
             0xFF30..=0xFF3F => self.wave_ram[(address - 0xFF30) as usize],
-            _      => 0,
+            _ => 0,
         }
     }
 
@@ -65,7 +50,9 @@ impl Channel3 {
         match address {
             0xFF1A => {
                 self.dac_on = value & 0x80 != 0;
-                if !self.dac_on { self.enabled = false; }
+                if !self.dac_on {
+                    self.enabled = false;
+                }
             }
             0xFF1B => {
                 self.length.value = 256 - value as u16;
@@ -77,9 +64,11 @@ impl Channel3 {
                 self.freq = (self.freq & 0x700) | value as u16;
             }
             0xFF1E => {
-                self.freq           = (self.freq & 0x0FF) | (((value & 0x07) as u16) << 8);
+                self.freq = (self.freq & 0x0FF) | (((value & 0x07) as u16) << 8);
                 self.length.enabled = value & 0x40 != 0;
-                if value & 0x80 != 0 { self.trigger(); }
+                if value & 0x80 != 0 {
+                    self.trigger();
+                }
             }
             0xFF30..=0xFF3F => {
                 self.wave_ram[(address - 0xFF30) as usize] = value;
@@ -104,13 +93,19 @@ impl Channel3 {
     /// The wave RAM holds 32 nibbles packed two-per-byte: high nibble first.
     pub fn current_sample(&self) -> u8 {
         let byte = self.wave_ram[(self.phase / 2) as usize];
-        if self.phase & 1 == 0 { byte >> 4 } else { byte & 0x0F }
+        if self.phase & 1 == 0 {
+            byte >> 4
+        } else {
+            byte & 0x0F
+        }
     }
 
     fn trigger(&mut self) {
-        self.enabled    = self.dac_on;
-        if self.length.value == 0 { self.length.value = 256; }
+        self.enabled = self.dac_on;
+        if self.length.value == 0 {
+            self.length.value = 256;
+        }
         self.freq_timer = (2048 - self.freq) * 2;
-        self.phase      = 0;
+        self.phase = 0;
     }
 }

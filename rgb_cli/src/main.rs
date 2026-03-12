@@ -90,7 +90,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Optional --boot-rom <path> argument: load a boot ROM image to run
     // before the cartridge (e.g. an open-source dmg_boot.bin).
-    let boot_rom: Option<Box<[u8]>> = if let Some(pos) = args.iter().position(|a| a == "--boot-rom") {
+    let boot_rom: Option<Box<[u8]>> = if let Some(pos) = args.iter().position(|a| a == "--boot-rom")
+    {
         match args.get(pos + 1) {
             Some(path) => match fs::read(path) {
                 Ok(bytes) => Some(bytes.into_boxed_slice()),
@@ -117,14 +118,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut dmg = match boot_rom {
         Some(rom) => DMG::new_with_boot_rom(Box::new(cartridge), rom),
-        None      => DMG::new(Box::new(cartridge)),
+        None => DMG::new(Box::new(cartridge)),
     };
 
     // Restore battery-backed RAM from a previous session if a save file exists.
-    if has_battery {
-        if let Ok(save_bytes) = fs::read(&save_path) {
-            dmg.load_save_data(&save_bytes);
-        }
+    if has_battery && let Ok(save_bytes) = fs::read(&save_path) {
+        dmg.load_save_data(&save_bytes);
     }
 
     // --- Open audio device --------------------------------------------------
@@ -194,10 +193,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // Persist battery-backed RAM so the next session can restore it.
-    if let Some(data) = dmg.save_data() {
-        if let Err(e) = fs::write(&save_path, data) {
-            eprintln!("warning: could not write save file {}: {e}", save_path.display());
-        }
+    if let Some(data) = dmg.save_data()
+        && let Err(e) = fs::write(&save_path, data)
+    {
+        eprintln!(
+            "warning: could not write save file {}: {e}",
+            save_path.display()
+        );
     }
 
     Ok(())

@@ -141,7 +141,11 @@ impl Cartridge for Mbc5 {
     }
 
     fn save_data(&self) -> Option<&[u8]> {
-        if self.info.battery { self.ram.as_deref() } else { None }
+        if self.info.battery {
+            self.ram.as_deref()
+        } else {
+            None
+        }
     }
 
     fn load_save_data(&mut self, data: &[u8]) {
