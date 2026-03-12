@@ -1,0 +1,14 @@
+# Minimal alsa.pc shim for systems with alsa-lib but not alsa-lib-devel.
+# The lib/ directory here contains a libasound.so symlink pointing at the
+# versioned libasound.so.2 installed by the alsa-lib package.
+prefix=/usr
+exec_prefix=${prefix}
+libdir=${pcfiledir}/lib
+includedir=${prefix}/include
+
+Name: ALSA
+Description: Advanced Linux Sound Architecture (ALSA) - Library
+Version: 1.2.14
+Libs: -L${libdir} -lasound
+Libs.private: -lm -ldl -lpthread -lrt
+Cflags: -I${includedir}

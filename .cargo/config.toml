@@ -1,0 +1,9 @@
+# This file configures Cargo for this workspace.
+#
+# PKG_CONFIG_PATH is extended so that the bundled pkgconfig/alsa.pc shim is
+# found on systems where alsa-lib-devel is not installed but libasound.so is
+# present (common on RHEL/CentOS with only alsa-lib, not alsa-lib-devel).
+# On systems that already have a system alsa.pc this entry is redundant but
+# harmless.
+[env]
+PKG_CONFIG_PATH = { value = "pkgconfig", relative = true, force = true }
