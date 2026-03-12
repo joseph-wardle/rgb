@@ -87,6 +87,15 @@ impl DMG {
         self.bus.framebuffer()
     }
 
+    /// Drain and return all audio samples generated during the last frame.
+    ///
+    /// Returns interleaved stereo f32 pairs (left, right, left, right, …)
+    /// in the range −1.0 to +1.0.  Call once per frame and push the result
+    /// into the audio output ring buffer.
+    pub fn drain_samples(&mut self) -> Vec<f32> {
+        self.bus.drain_samples()
+    }
+
     /// Battery-backed RAM contents for writing to a `.sav` file on exit.
     /// Returns `None` if the cartridge has no battery (nothing to save).
     pub fn save_data(&self) -> Option<&[u8]> {

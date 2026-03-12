@@ -68,6 +68,31 @@ impl Channel4 {
         }
     }
 
+    /// Clock the frequency timer by one T-cycle.  When it expires, clock
+    /// the LFSR and reload the timer.
+    pub fn tick_timer(&mut self) {
+        if self.freq_timer > 0 {
+            self.freq_timer -= 1;
+        }
+        if self.freq_timer == 0 {
+            self.freq_timer = self.period_t_cycles();
+            self.clock_lfsr();
+        }
+    }
+
+    /// Advance the LFSR by one step.
+    ///
+    /// The feedback bit is XOR of bits 0 and 1.  It is shifted into bit 14
+    /// (and also bit 6 in 7-bit narrow mode), then the register shifts right.
+    fn clock_lfsr(&mut self) {
+        let feedback = (self.lfsr ^ (self.lfsr >> 1)) & 1;
+        self.lfsr = (self.lfsr >> 1) | (feedback << 14);
+        if self.lfsr_narrow {
+            // Replace bit 6 with the same feedback bit for a 7-bit period.
+            self.lfsr = (self.lfsr & !(1 << 6)) | (feedback << 6);
+        }
+    }
+
     fn trigger(&mut self) {
         self.enabled         = self.dac_on;
         if self.length.value == 0 { self.length.value = 64; }

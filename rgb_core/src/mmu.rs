@@ -201,6 +201,12 @@ impl MMU {
         &self.devices.serial
     }
 
+    /// Drain and return all audio samples generated since the last call.
+    /// Returns interleaved stereo f32 pairs (left, right, …) in −1.0..=+1.0.
+    pub(crate) fn drain_samples(&mut self) -> Vec<f32> {
+        self.devices.apu.drain_samples()
+    }
+
     /// Battery-backed RAM contents for writing to a `.sav` file, or `None`
     /// if the cartridge has no battery.
     pub(crate) fn save_data(&self) -> Option<&[u8]> {

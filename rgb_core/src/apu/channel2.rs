@@ -68,6 +68,17 @@ impl Channel2 {
         }
     }
 
+    /// Clock the frequency timer by one T-cycle.
+    pub fn tick_timer(&mut self) {
+        if self.freq_timer > 0 {
+            self.freq_timer -= 1;
+        }
+        if self.freq_timer == 0 {
+            self.freq_timer = (2048 - self.freq) * 4;
+            self.phase = (self.phase + 1) & 7;
+        }
+    }
+
     fn trigger(&mut self) {
         self.enabled         = self.dac_on;
         if self.length.value == 0 { self.length.value = 64; }

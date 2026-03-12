@@ -127,6 +127,44 @@ impl Channel1 {
         }
     }
 
+    /// Clock the frequency timer by one T-cycle.  When it expires the wave
+    /// phase advances and the timer reloads.
+    pub fn tick_timer(&mut self) {
+        if self.freq_timer > 0 {
+            self.freq_timer -= 1;
+        }
+        if self.freq_timer == 0 {
+            self.freq_timer = (2048 - self.freq) * 4;
+            self.phase = (self.phase + 1) & 7;
+        }
+    }
+
+    /// Clock the frequency sweep unit.  Called at 128 Hz (frame-sequencer
+    /// steps 2 and 6).  Updates `sweep_freq` and `freq`, or disables the
+    /// channel on 11-bit overflow.
+    pub fn clock_sweep(&mut self) {
+        if self.sweep_timer > 0 {
+            self.sweep_timer -= 1;
+        }
+        if self.sweep_timer == 0 {
+            self.sweep_timer = if self.sweep.period != 0 { self.sweep.period } else { 8 };
+            if self.sweep_active && self.sweep.period != 0 {
+                if let Some(new_freq) = self.calc_sweep_freq() {
+                    if self.sweep.shift != 0 {
+                        self.sweep_freq = new_freq;
+                        self.freq       = new_freq;
+                    }
+                    // Second overflow check after the update.
+                    if self.calc_sweep_freq().is_none() {
+                        self.enabled = false;
+                    }
+                } else {
+                    self.enabled = false;
+                }
+            }
+        }
+    }
+
     /// Compute the next sweep frequency without writing it back.
     /// Returns `None` on 11-bit overflow (> 2047), which would silence the channel.
     pub fn calc_sweep_freq(&self) -> Option<u16> {

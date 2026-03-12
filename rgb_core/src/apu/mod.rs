@@ -75,6 +75,35 @@ const OR_MASK: [u8; 0x17] = [
 ];
 
 // ---------------------------------------------------------------------------
+// Pulse duty-cycle waveform
+// ---------------------------------------------------------------------------
+//
+// Each byte encodes 8 phase steps: bit N = 1 means phase N outputs "high".
+// The four duty cycles:  12.5%, 25%, 50%, 75%.
+//
+//   Duty 0 (12.5%): -------X   only phase 7 is high
+//   Duty 1 (25%):   X------X   phases 0 and 7
+//   Duty 2 (50%):   X---XXXX   phases 0 and 4–7
+//   Duty 3 (75%):   -XXXXXX-   phases 1–6
+//
+// Access: `(DUTY_PATTERNS[duty] >> phase) & 1`
+#[rustfmt::skip]
+const DUTY_PATTERNS: [u8; 4] = [0x01, 0x81, 0xF1, 0x7E];
+
+// ---------------------------------------------------------------------------
+// Timing constants
+// ---------------------------------------------------------------------------
+
+/// DMG APU master clock rate (T-cycles per second).
+const APU_CLOCK_HZ: f32 = 4_194_304.0;
+
+/// Audio output sample rate (Hz).
+pub(crate) const SAMPLE_RATE: u32 = 44_100;
+
+/// T-cycles per audio output sample.
+const SAMPLE_PERIOD_T: f32 = APU_CLOCK_HZ / SAMPLE_RATE as f32; // ≈ 95.1085
+
+// ---------------------------------------------------------------------------
 // APU
 // ---------------------------------------------------------------------------
 
@@ -97,37 +126,187 @@ pub(crate) struct APU {
     /// NR52 bit 7 — master power switch.
     /// When false all APU registers are cleared and reads return 0xFF.
     pub on: bool,
+
+    // --- Timing state ---
+
+    /// T-cycle countdown to the next frame-sequencer tick (fires at 512 Hz).
+    frame_seq_timer: u32,
+    /// Current step of the 8-step frame-sequencer cycle (0–7).
+    frame_seq_step: u8,
+    /// Fractional T-cycle accumulator for sample generation.
+    sample_timer: f32,
+    /// Queued interleaved stereo samples (left, right, left, right, …).
+    samples: Vec<f32>,
 }
 
 impl APU {
     pub(crate) fn new() -> Self {
         Self {
-            ch1:  Channel1::default(),
-            ch2:  Channel2::default(),
-            ch3:  Channel3::default(),
-            ch4:  Channel4::default(),
-            nr50: 0,
-            nr51: 0,
-            on:   false,
+            ch1:             Channel1::default(),
+            ch2:             Channel2::default(),
+            ch3:             Channel3::default(),
+            ch4:             Channel4::default(),
+            nr50:            0,
+            nr51:            0,
+            on:              false,
+            frame_seq_timer: 8192,
+            frame_seq_step:  0,
+            sample_timer:    0.0,
+            samples:         Vec::new(),
         }
     }
 
     /// Advance the APU by `cycles` machine cycles (1 machine cycle = 4 T-cycles).
     ///
-    /// Frame-sequencer clocking and sample generation are added in the next
-    /// phase; this stub wires the APU into the master clock without producing
-    /// any output.
-    pub(crate) fn step(&mut self, _cycles: u16) {}
+    /// Processes one T-cycle at a time: clocks channel frequency timers every
+    /// T-cycle, the frame sequencer every 8,192 T-cycles, and outputs a stereo
+    /// sample pair roughly every 95 T-cycles (44,100 Hz).
+    pub(crate) fn step(&mut self, cycles: u16) {
+        if !self.on {
+            return;
+        }
+        for _ in 0..(cycles * 4) {
+            self.tick();
+        }
+    }
 
     /// Return and clear all queued audio samples as interleaved stereo f32
     /// values in the range −1.0 to +1.0 (left, right, left, right, …).
     ///
     /// The CLI calls this once per frame and pushes the slice into the audio
-    /// ring buffer.  This stub always returns an empty vec until sample
-    /// generation is implemented in the next phase.
+    /// ring buffer.
     pub(crate) fn drain_samples(&mut self) -> Vec<f32> {
-        Vec::new()
+        std::mem::take(&mut self.samples)
     }
+
+    // -----------------------------------------------------------------------
+    // Private: per-T-cycle tick
+    // -----------------------------------------------------------------------
+
+    fn tick(&mut self) {
+        // 1. Clock channel frequency timers.
+        self.ch1.tick_timer();
+        self.ch2.tick_timer();
+        self.ch3.tick_timer();
+        self.ch4.tick_timer();
+
+        // 2. Frame sequencer: fires at 512 Hz (every 8,192 T-cycles).
+        self.frame_seq_timer -= 1;
+        if self.frame_seq_timer == 0 {
+            self.frame_seq_timer = 8192;
+            self.clock_frame_sequencer();
+        }
+
+        // 3. Sample output: accumulate until we've consumed one sample's worth.
+        self.sample_timer += 1.0;
+        if self.sample_timer >= SAMPLE_PERIOD_T {
+            self.sample_timer -= SAMPLE_PERIOD_T;
+            self.push_sample();
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Private: frame sequencer
+    // -----------------------------------------------------------------------
+
+    fn clock_frame_sequencer(&mut self) {
+        // Length counters clock at 256 Hz: steps 0, 2, 4, 6.
+        if self.frame_seq_step & 1 == 0 {
+            self.clock_length_counters();
+        }
+        // Frequency sweep clocks at 128 Hz: steps 2 and 6.
+        if self.frame_seq_step == 2 || self.frame_seq_step == 6 {
+            self.ch1.clock_sweep();
+        }
+        // Volume envelopes clock at 64 Hz: step 7 only.
+        if self.frame_seq_step == 7 {
+            self.clock_volume_envelopes();
+        }
+        self.frame_seq_step = (self.frame_seq_step + 1) & 7;
+    }
+
+    fn clock_length_counters(&mut self) {
+        if self.ch1.length.clock() { self.ch1.enabled = false; }
+        if self.ch2.length.clock() { self.ch2.enabled = false; }
+        if self.ch3.length.clock() { self.ch3.enabled = false; }
+        if self.ch4.length.clock() { self.ch4.enabled = false; }
+    }
+
+    fn clock_volume_envelopes(&mut self) {
+        self.ch1.envelope.clock();
+        self.ch2.envelope.clock();
+        self.ch4.envelope.clock();
+        // Ch3 has no volume envelope; its level is set by NR32.
+    }
+
+    // -----------------------------------------------------------------------
+    // Private: sample generation
+    // -----------------------------------------------------------------------
+
+    fn push_sample(&mut self) {
+        let ch1 = self.ch1_dac_output();
+        let ch2 = self.ch2_dac_output();
+        let ch3 = self.ch3_dac_output();
+        let ch4 = self.ch4_dac_output();
+
+        // NR50: master volume (0–7) for left (bits 6–4) and right (bits 2–0).
+        let left_vol  = ((self.nr50 >> 4) & 0x07) as f32 / 7.0;
+        let right_vol = (self.nr50 & 0x07) as f32 / 7.0;
+
+        // NR51: which channels are panned to each output.
+        // Bit 7/6/5/4 = Ch4/3/2/1 to left; bit 3/2/1/0 = Ch4/3/2/1 to right.
+        let left = {
+            let mut s = 0.0f32;
+            if self.nr51 & 0x80 != 0 { s += ch4; }
+            if self.nr51 & 0x40 != 0 { s += ch3; }
+            if self.nr51 & 0x20 != 0 { s += ch2; }
+            if self.nr51 & 0x10 != 0 { s += ch1; }
+            s * left_vol / 4.0
+        };
+        let right = {
+            let mut s = 0.0f32;
+            if self.nr51 & 0x08 != 0 { s += ch4; }
+            if self.nr51 & 0x04 != 0 { s += ch3; }
+            if self.nr51 & 0x02 != 0 { s += ch2; }
+            if self.nr51 & 0x01 != 0 { s += ch1; }
+            s * right_vol / 4.0
+        };
+
+        self.samples.push(left);
+        self.samples.push(right);
+    }
+
+    // DAC conversion: amplitude 0–15 → float −1.0 to +1.0.
+    // When the channel or its DAC is off, the output is 0.0 (DC centre).
+    fn ch1_dac_output(&self) -> f32 {
+        if !self.ch1.enabled || !self.ch1.dac_on { return 0.0; }
+        let high = (DUTY_PATTERNS[self.ch1.duty as usize] >> self.ch1.phase) & 1;
+        dac(high as u8 * self.ch1.envelope.volume)
+    }
+
+    fn ch2_dac_output(&self) -> f32 {
+        if !self.ch2.enabled || !self.ch2.dac_on { return 0.0; }
+        let high = (DUTY_PATTERNS[self.ch2.duty as usize] >> self.ch2.phase) & 1;
+        dac(high as u8 * self.ch2.envelope.volume)
+    }
+
+    fn ch3_dac_output(&self) -> f32 {
+        if !self.ch3.enabled || !self.ch3.dac_on { return 0.0; }
+        // output_level: 0 = mute (shift 4), 1 = 100% (shift 0), 2 = 50% (shift 1), 3 = 25% (shift 2)
+        let shift = [4u8, 0, 1, 2][self.ch3.output_level as usize];
+        dac(self.ch3.current_sample() >> shift)
+    }
+
+    fn ch4_dac_output(&self) -> f32 {
+        if !self.ch4.enabled || !self.ch4.dac_on { return 0.0; }
+        // LFSR bit 0 inverted: 0 → high (volume), 1 → low (silence)
+        let high = (self.ch4.lfsr & 1) ^ 1;
+        dac(high as u8 * self.ch4.envelope.volume)
+    }
+
+    // -----------------------------------------------------------------------
+    // Private: helpers
+    // -----------------------------------------------------------------------
 
     fn or_mask(address: u16) -> u8 {
         match address {
@@ -145,6 +324,15 @@ impl APU {
         self.nr50 = 0;
         self.nr51 = 0;
     }
+}
+
+/// Convert a 4-bit DAC amplitude (0–15) to a normalised float (−1.0 to +1.0).
+///
+/// The DMG DAC is a simple resistor ladder.  Amplitude 0 maps to the negative
+/// rail and 15 to the positive rail.
+#[inline]
+fn dac(amplitude: u8) -> f32 {
+    (amplitude as f32 / 7.5) - 1.0
 }
 
 impl Memory for APU {

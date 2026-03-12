@@ -30,6 +30,20 @@ pub struct LengthCounter {
     pub enabled: bool, // NRx4 bit 6: stop channel when counter expires
 }
 
+impl LengthCounter {
+    /// Clock the length counter.  Returns `true` when the counter expires
+    /// and the channel should be silenced.
+    pub fn clock(&mut self) -> bool {
+        if self.enabled && self.value > 0 {
+            self.value -= 1;
+            if self.value == 0 {
+                return true;
+            }
+        }
+        false
+    }
+}
+
 /// Volume envelope used by Ch1, Ch2, and Ch4.
 ///
 /// On trigger, `volume` is loaded from `initial` and `timer` from `period`.
@@ -42,4 +56,25 @@ pub struct VolumeEnvelope {
     pub dir:     EnvDir, // NRx2 bit 3: Increase or Decrease
     pub period:  u8,     // NRx2 bits 0–2: envelope period; 0 = frozen
     pub timer:   u8,     // internal countdown; reloads from period
+}
+
+impl VolumeEnvelope {
+    /// Clock the volume envelope.  The timer decrements each call; when it
+    /// reaches 0 the volume steps by ±1 and the timer reloads.  A period of 0
+    /// means the envelope is frozen (volume holds indefinitely).
+    pub fn clock(&mut self) {
+        if self.period == 0 {
+            return;
+        }
+        if self.timer > 0 {
+            self.timer -= 1;
+        }
+        if self.timer == 0 {
+            self.timer = self.period;
+            self.volume = match self.dir {
+                EnvDir::Increase => self.volume.saturating_add(1).min(15),
+                EnvDir::Decrease => self.volume.saturating_sub(1),
+            };
+        }
+    }
 }

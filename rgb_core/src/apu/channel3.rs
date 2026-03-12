@@ -88,6 +88,25 @@ impl Channel3 {
         }
     }
 
+    /// Clock the frequency timer by one T-cycle.  Ch3 fires twice as often
+    /// as Ch1/Ch2 for the same frequency value, stepping through 32 nibbles.
+    pub fn tick_timer(&mut self) {
+        if self.freq_timer > 0 {
+            self.freq_timer -= 1;
+        }
+        if self.freq_timer == 0 {
+            self.freq_timer = (2048 - self.freq) * 2;
+            self.phase = (self.phase + 1) & 31;
+        }
+    }
+
+    /// The current 4-bit PCM sample at the wave phase position.
+    /// The wave RAM holds 32 nibbles packed two-per-byte: high nibble first.
+    pub fn current_sample(&self) -> u8 {
+        let byte = self.wave_ram[(self.phase / 2) as usize];
+        if self.phase & 1 == 0 { byte >> 4 } else { byte & 0x0F }
+    }
+
     fn trigger(&mut self) {
         self.enabled    = self.dac_on;
         if self.length.value == 0 { self.length.value = 256; }
