@@ -379,11 +379,25 @@ impl APU {
     }
 
     /// Clear all channel and control registers.  Called when NR52 bit 7 → 0.
+    ///
+    /// On DMG, length counters survive APU power-off — only control, frequency,
+    /// and envelope registers are cleared.  This allows games to pre-load length
+    /// values before powering the APU on.
     fn power_off(&mut self) {
+        let lengths = [
+            self.ch1.length.value,
+            self.ch2.length.value,
+            self.ch3.length.value,
+            self.ch4.length.value,
+        ];
         self.ch1 = Channel1::default();
         self.ch2 = Channel2::default();
         self.ch3 = Channel3::default();
         self.ch4 = Channel4::default();
+        self.ch1.length.value = lengths[0];
+        self.ch2.length.value = lengths[1];
+        self.ch3.length.value = lengths[2];
+        self.ch4.length.value = lengths[3];
         self.nr50 = 0;
         self.nr51 = 0;
     }
@@ -429,9 +443,9 @@ impl Memory for APU {
     }
 
     fn write_byte(&mut self, address: u16, value: u8) {
-        // Wave RAM is always writable.
+        // Wave RAM is always writable (no trigger possible here; frame_seq_step unused).
         if matches!(address, 0xFF30..=0xFF3F) {
-            self.ch3.write(address, value);
+            self.ch3.write(address, value, 0);
             return;
         }
 
@@ -451,10 +465,18 @@ impl Memory for APU {
         }
 
         match address {
-            0xFF10..=0xFF14 => self.ch1.write(address, value),
-            0xFF15..=0xFF19 => self.ch2.write(address, value),
-            0xFF1A..=0xFF1E => self.ch3.write(address, value),
-            0xFF1F..=0xFF23 => self.ch4.write(address, value),
+            0xFF10..=0xFF14 => self.ch1.write(address, value, self.frame_seq_step),
+            0xFF15..=0xFF19 => self.ch2.write(address, value, self.frame_seq_step),
+            0xFF1A..=0xFF1E => {
+                // Ch3 trigger on DMG: apply wave RAM corruption *before* triggering.
+                // While Ch3 is active, the byte currently being read is accidentally
+                // re-latched into the first bytes of wave RAM (DMG hardware only).
+                if address == 0xFF1E && value & 0x80 != 0 {
+                    self.ch3.apply_dmg_trigger_corruption();
+                }
+                self.ch3.write(address, value, self.frame_seq_step);
+            }
+            0xFF1F..=0xFF23 => self.ch4.write(address, value, self.frame_seq_step),
             0xFF24 => self.nr50 = value,
             0xFF25 => self.nr51 = value,
             _ => {}

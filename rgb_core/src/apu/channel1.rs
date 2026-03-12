@@ -47,6 +47,13 @@ pub struct Channel1 {
     pub sweep_freq: u16,    // shadow copy of freq used by sweep overflow checks
     pub sweep_timer: u8,    // countdown to the next sweep tick; 0 triggers a reload
     pub sweep_active: bool, // true while the sweep unit is tracking
+
+    /// Set whenever a sweep calculation runs in negate mode since the last trigger.
+    ///
+    /// Hardware anti-glitch: if the negate bit is cleared while this flag is set,
+    /// the channel is disabled immediately.  This prevents a frequency discontinuity
+    /// that would occur if negate-tuned sweep math were suddenly applied in add mode.
+    used_negate_since_trigger: bool,
 }
 
 impl Channel1 {
@@ -68,11 +75,17 @@ impl Channel1 {
         }
     }
 
-    pub fn write(&mut self, address: u16, value: u8) {
+    pub fn write(&mut self, address: u16, value: u8, frame_seq_step: u8) {
         match address {
             0xFF10 => {
                 self.sweep.period = (value >> 4) & 0x07;
-                self.sweep.negate = value & 0x08 != 0;
+                let new_negate = value & 0x08 != 0;
+                // If negate has been used since the last trigger and is now being
+                // cleared, the channel is disabled as a hardware anti-glitch measure.
+                if self.used_negate_since_trigger && !new_negate {
+                    self.enabled = false;
+                }
+                self.sweep.negate = new_negate;
                 self.sweep.shift = value & 0x07;
             }
             0xFF11 => {
@@ -95,14 +108,14 @@ impl Channel1 {
                 self.freq = (self.freq & 0x0FF) | (((value & 0x07) as u16) << 8);
                 self.length.enabled = value & 0x40 != 0;
                 if value & 0x80 != 0 {
-                    self.trigger();
+                    self.trigger(frame_seq_step);
                 }
             }
             _ => {}
         }
     }
 
-    fn trigger(&mut self) {
+    fn trigger(&mut self, frame_seq_step: u8) {
         self.enabled = self.dac_on;
         if self.length.value == 0 {
             self.length.value = 64;
@@ -117,10 +130,21 @@ impl Channel1 {
             8
         };
         self.sweep_active = self.sweep.period != 0 || self.sweep.shift != 0;
+        self.used_negate_since_trigger = false;
+
         // Non-zero shift performs an immediate overflow check on trigger
         // (but does not update the frequency — that waits for the first sweep clock).
         if self.sweep.shift != 0 && self.calc_sweep_freq().is_none() {
             self.enabled = false;
+        }
+
+        // Extra length clock when the frame sequencer's next step won't clock
+        // length (next step is odd: 1, 3, 5, 7 — `frame_seq_step` already
+        // points at the next step because it was incremented after the last tick).
+        if self.length.enabled && frame_seq_step & 1 == 1 {
+            if self.length.clock() {
+                self.enabled = false;
+            }
         }
     }
 
@@ -150,6 +174,11 @@ impl Channel1 {
                 8
             };
             if self.sweep_active && self.sweep.period != 0 {
+                if self.sweep.negate {
+                    // Track that a negate calculation has run since last trigger.
+                    // Clearing the negate bit after this will disable the channel.
+                    self.used_negate_since_trigger = true;
+                }
                 if let Some(new_freq) = self.calc_sweep_freq() {
                     if self.sweep.shift != 0 {
                         self.sweep_freq = new_freq;

@@ -46,7 +46,7 @@ impl Channel2 {
         }
     }
 
-    pub fn write(&mut self, address: u16, value: u8) {
+    pub fn write(&mut self, address: u16, value: u8, frame_seq_step: u8) {
         match address {
             0xFF15 => {} // unmapped
             0xFF16 => {
@@ -69,7 +69,7 @@ impl Channel2 {
                 self.freq = (self.freq & 0x0FF) | (((value & 0x07) as u16) << 8);
                 self.length.enabled = value & 0x40 != 0;
                 if value & 0x80 != 0 {
-                    self.trigger();
+                    self.trigger(frame_seq_step);
                 }
             }
             _ => {}
@@ -87,7 +87,7 @@ impl Channel2 {
         }
     }
 
-    fn trigger(&mut self) {
+    fn trigger(&mut self, frame_seq_step: u8) {
         self.enabled = self.dac_on;
         if self.length.value == 0 {
             self.length.value = 64;
@@ -95,5 +95,14 @@ impl Channel2 {
         self.freq_timer = (2048 - self.freq) * 4;
         self.envelope.volume = self.envelope.initial;
         self.envelope.timer = self.envelope.period;
+
+        // Extra length clock when the frame sequencer's next step won't clock
+        // length (next step is odd: 1, 3, 5, 7 — `frame_seq_step` already
+        // points at the next step because it was incremented after the last tick).
+        if self.length.enabled && frame_seq_step & 1 == 1 {
+            if self.length.clock() {
+                self.enabled = false;
+            }
+        }
     }
 }
