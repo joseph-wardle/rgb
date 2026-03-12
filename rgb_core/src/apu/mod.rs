@@ -103,6 +103,14 @@ pub(crate) const SAMPLE_RATE: u32 = 44_100;
 /// T-cycles per audio output sample.
 const SAMPLE_PERIOD_T: f32 = APU_CLOCK_HZ / SAMPLE_RATE as f32; // ≈ 95.1085
 
+/// System counter bit 12: the frame sequencer fires on each falling edge,
+/// producing a 512 Hz clock (one tick every 8,192 T-cycles).
+///
+/// This bit is also part of DIV (DIV bit 4, since DIV = counter bits 8–15),
+/// so a DIV write can trigger an immediate frame-sequencer tick — see
+/// [`APU::notify_div_reset`].
+const FRAME_SEQ_BIT: u16 = 1 << 12;
+
 // ---------------------------------------------------------------------------
 // APU
 // ---------------------------------------------------------------------------
@@ -128,8 +136,6 @@ pub(crate) struct APU {
     pub on: bool,
 
     // --- Timing state ---
-    /// T-cycle countdown to the next frame-sequencer tick (fires at 512 Hz).
-    frame_seq_timer: u32,
     /// Current step of the 8-step frame-sequencer cycle (0–7).
     frame_seq_step: u8,
     /// Fractional T-cycle accumulator for sample generation.
@@ -148,24 +154,57 @@ impl APU {
             nr50: 0,
             nr51: 0,
             on: false,
-            frame_seq_timer: 8192,
             frame_seq_step: 0,
             sample_timer: 0.0,
             samples: Vec::new(),
         }
     }
 
-    /// Advance the APU by `cycles` machine cycles (1 machine cycle = 4 T-cycles).
+    /// Advance the APU by `cycles` T-cycles.
     ///
-    /// Processes one T-cycle at a time: clocks channel frequency timers every
-    /// T-cycle, the frame sequencer every 8,192 T-cycles, and outputs a stereo
-    /// sample pair roughly every 95 T-cycles (44,100 Hz).
-    pub(crate) fn step(&mut self, cycles: u16) {
+    /// `prev_counter` is the system counter value at the start of this step
+    /// (read from the timer before it advances).  The APU uses it to detect
+    /// falling edges on the frame-sequencer bit (bit 12) without owning the
+    /// system counter directly.
+    ///
+    /// Channel frequency timers are clocked once per T-cycle.  The frame
+    /// sequencer fires at 512 Hz via falling-edge detection on counter bit 12.
+    /// Audio samples are pushed at roughly 44,100 Hz.
+    pub(crate) fn step(&mut self, cycles: u16, prev_counter: u16) {
         if !self.on {
             return;
         }
-        for _ in 0..(cycles * 4) {
-            self.tick();
+        let mut counter = prev_counter;
+        // Process one machine cycle (4 T-cycles) at a time so the frame
+        // sequencer edge can be detected at M-cycle granularity.
+        for _ in 0..cycles / 4 {
+            let next_counter = counter.wrapping_add(4);
+
+            // Frame sequencer: 512 Hz clock from system counter bit 12.
+            // One tick fires on each falling edge (bit transitions 1 → 0).
+            if counter & FRAME_SEQ_BIT != 0 && next_counter & FRAME_SEQ_BIT == 0 {
+                self.clock_frame_sequencer();
+            }
+
+            counter = next_counter;
+
+            // Clock channel timers and sample output four times (one per T-cycle).
+            self.tick_t();
+            self.tick_t();
+            self.tick_t();
+            self.tick_t();
+        }
+    }
+
+    /// Called by the MMU when the game writes to 0xFF04 (DIV reset).
+    ///
+    /// Resetting the system counter to zero creates a falling edge on any
+    /// counter bit that was previously 1.  If bit 12 was set, the frame
+    /// sequencer fires immediately — exactly as it would from a natural
+    /// falling edge during [`step`].
+    pub(crate) fn notify_div_reset(&mut self, old_counter: u16) {
+        if self.on && old_counter & FRAME_SEQ_BIT != 0 {
+            self.clock_frame_sequencer();
         }
     }
 
@@ -182,21 +221,14 @@ impl APU {
     // Private: per-T-cycle tick
     // -----------------------------------------------------------------------
 
-    fn tick(&mut self) {
-        // 1. Clock channel frequency timers.
+    /// Clock all channel frequency timers and advance sample output by one T-cycle.
+    fn tick_t(&mut self) {
         self.ch1.tick_timer();
         self.ch2.tick_timer();
         self.ch3.tick_timer();
         self.ch4.tick_timer();
 
-        // 2. Frame sequencer: fires at 512 Hz (every 8,192 T-cycles).
-        self.frame_seq_timer -= 1;
-        if self.frame_seq_timer == 0 {
-            self.frame_seq_timer = 8192;
-            self.clock_frame_sequencer();
-        }
-
-        // 3. Sample output: accumulate until we've consumed one sample's worth.
+        // Sample output: accumulate until we've consumed one sample's worth.
         self.sample_timer += 1.0;
         if self.sample_timer >= SAMPLE_PERIOD_T {
             self.sample_timer -= SAMPLE_PERIOD_T;

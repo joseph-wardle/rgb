@@ -80,12 +80,15 @@ impl MMU {
     }
 
     pub(crate) fn step(&mut self, cycles: u16) {
+        // Snapshot the system counter before the timer advances so the APU
+        // can detect falling edges (frame sequencer, etc.) over the same span.
+        let counter_before = self.devices.timer.system_counter();
         self.devices.timer.step(cycles, &mut self.interrupts.flag);
         self.devices.ppu.step(cycles, &mut self.interrupts.flag);
-        self.devices.apu.step(cycles);
+        self.devices.apu.step(cycles, counter_before);
         self.log_step(
             cycles,
-            self.devices.timer.div,
+            self.devices.timer.div(),
             self.devices.timer.tima,
             self.devices.timer.tma,
             self.devices.timer.tac,
@@ -125,7 +128,7 @@ impl MMU {
             0xFF00 => self.devices.joypad.read(),
             0xFF01 => self.devices.serial.sb,
             0xFF02 => self.devices.serial.sc,
-            0xFF04 => self.devices.timer.div,
+            0xFF04 => self.devices.timer.div(),
             0xFF05 => self.devices.timer.tima,
             0xFF06 => self.devices.timer.tma,
             0xFF07 => self.devices.timer.tac,
@@ -148,9 +151,14 @@ impl MMU {
                     self.interrupts.flag |= 0x08;
                 }
             }
-            0xFF04 => self.devices.timer.reset_divider(),
+            0xFF04 => {
+                // Resetting the system counter can create a falling edge on
+                // both the TIMA bit tap and the APU frame-sequencer bit (12).
+                let old = self.devices.timer.reset_divider();
+                self.devices.apu.notify_div_reset(old);
+            }
             0xFF05 => self.devices.timer.write_tima(value),
-            0xFF06 => self.devices.timer.write_tma(value),
+            0xFF06 => self.devices.timer.tma = value,
             0xFF07 => self.devices.timer.tac = value,
             0xFF0F => self.interrupts.flag = value,
             0xFFFF => self.interrupts.enable = value,
