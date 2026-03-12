@@ -6,3 +6,5 @@ edition = "2024"
 [dependencies]
 rgb_core = { path = "../rgb_core" }
 minifb   = "0.28"
+cpal     = "0.15"
+ringbuf  = "0.4"

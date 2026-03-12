@@ -78,6 +78,7 @@ impl MMU {
     pub(crate) fn step(&mut self, cycles: u16) {
         self.devices.timer.step(cycles, &mut self.interrupts.flag);
         self.devices.ppu.step(cycles, &mut self.interrupts.flag);
+        self.devices.apu.step(cycles);
         self.log_step(
             cycles,
             self.devices.timer.div,
@@ -198,6 +199,12 @@ impl MemoryBus for MMU {}
 impl MMU {
     pub(crate) fn serial(&self) -> &Serial {
         &self.devices.serial
+    }
+
+    /// Drain and return all audio samples generated since the last call.
+    /// Returns interleaved stereo f32 pairs (left, right, …) in −1.0..=+1.0.
+    pub(crate) fn drain_samples(&mut self) -> Vec<f32> {
+        self.devices.apu.drain_samples()
     }
 
     /// Battery-backed RAM contents for writing to a `.sav` file, or `None`

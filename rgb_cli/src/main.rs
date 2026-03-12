@@ -14,9 +14,15 @@ use minifb::{Key, Window, WindowOptions};
 use rgb_core::cartridge::{Cartridge, CartridgeKind};
 use rgb_core::gameboy::DMG;
 use rgb_core::{Button, SCREEN_HEIGHT, SCREEN_WIDTH};
+use ringbuf::traits::Producer;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 use std::{env, fs, process};
+
+mod audio;
+
+/// Audio output sample rate in Hz.  Must match the APU's SAMPLE_RATE.
+const SAMPLE_RATE: u32 = 44_100;
 
 // ---------------------------------------------------------------------------
 // Frame pacing
@@ -97,6 +103,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
+    // --- Open audio device --------------------------------------------------
+    // AudioOutput opens the default device and starts streaming in a background
+    // thread.  If audio is unavailable the emulator runs silently.
+    let mut audio = audio::AudioOutput::open(SAMPLE_RATE);
+    if audio.is_none() {
+        eprintln!("warning: no audio device available; running without sound");
+    }
+
     // --- Open window --------------------------------------------------------
     // The window title shows the ROM name so you can tell which game is running.
     let window_title = if title.is_empty() {
@@ -130,6 +144,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         // Run exactly one DMG frame (70,224 T-cycles).
         dmg.step_frame();
+
+        // Push the audio samples produced during this frame into the ring
+        // buffer so the audio callback thread can drain them.  If no audio
+        // device is open the samples are simply discarded.
+        if let Some(ref mut audio_out) = audio {
+            for sample in dmg.drain_samples() {
+                // Non-blocking push; if the buffer is full we drop the sample
+                // rather than blocking the emulator thread.
+                let _ = audio_out.producer.try_push(sample);
+            }
+        }
 
         // Convert shade indices to RGB pixels and blit to the window.
         let pixels = shade_to_rgb(dmg.framebuffer());
