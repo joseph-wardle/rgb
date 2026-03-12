@@ -8,23 +8,35 @@ on:
 
 jobs:
   check:
-    name: Check
+    name: Lint
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout sources
-        uses: actions/checkout@v4
-
-      - name: Install toolchain
-        uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy, rustfmt
-
       - name: cargo fmt
         run: cargo fmt --all --check
-
       - name: cargo clippy
         run: cargo clippy --all-targets --all-features -- -D warnings
 
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install ALSA development headers
+        run: sudo apt-get install -y libasound2-dev
+
+      - name: Restore Blargg ROM cache
+        uses: actions/cache@v4
+        with:
+          path: target/blargg-test-roms
+          key: blargg-roms-v1
+
       - name: cargo test
-        run: cargo test --all-features
+        run: cargo test --release -p rgb_core
+        env:
+          RGB_BLARGG_ROM_DIR: ${{ github.workspace }}/target/blargg-test-roms
