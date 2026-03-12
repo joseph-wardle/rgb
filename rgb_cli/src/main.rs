@@ -82,10 +82,31 @@ fn shade_to_rgb(framebuffer: &[u8]) -> Vec<u32> {
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // --- Parse arguments ----------------------------------------------------
-    let rom_path = env::args().nth(1).unwrap_or_else(|| {
-        eprintln!("Usage: rgb <rom.gb>");
+    let args: Vec<String> = env::args().collect();
+    let rom_path = args.get(1).cloned().unwrap_or_else(|| {
+        eprintln!("Usage: rgb <rom.gb> [--boot-rom <boot.bin>]");
         process::exit(1);
     });
+
+    // Optional --boot-rom <path> argument: load a boot ROM image to run
+    // before the cartridge (e.g. an open-source dmg_boot.bin).
+    let boot_rom: Option<Box<[u8]>> = if let Some(pos) = args.iter().position(|a| a == "--boot-rom") {
+        match args.get(pos + 1) {
+            Some(path) => match fs::read(path) {
+                Ok(bytes) => Some(bytes.into_boxed_slice()),
+                Err(e) => {
+                    eprintln!("error: could not read boot ROM {path}: {e}");
+                    process::exit(1);
+                }
+            },
+            None => {
+                eprintln!("error: --boot-rom requires a path argument");
+                process::exit(1);
+            }
+        }
+    } else {
+        None
+    };
 
     // --- Load cartridge -----------------------------------------------------
     let rom = fs::read(&rom_path)?;
@@ -94,7 +115,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let has_battery = cartridge.info().battery;
     let save_path = PathBuf::from(&rom_path).with_extension("sav");
 
-    let mut dmg = DMG::new(Box::new(cartridge));
+    let mut dmg = match boot_rom {
+        Some(rom) => DMG::new_with_boot_rom(Box::new(cartridge), rom),
+        None      => DMG::new(Box::new(cartridge)),
+    };
 
     // Restore battery-backed RAM from a previous session if a save file exists.
     if has_battery {

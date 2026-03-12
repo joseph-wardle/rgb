@@ -53,6 +53,8 @@ pub(crate) struct MMU {
 
     hram: [u8; 0x7F],   // High RAM (0xFF80-0xFFFE)
     wram: [u8; 0x2000], // Work RAM: 8 KiB, two fixed 4 KiB banks (DMG has no banking)
+    boot_rom: Option<Box<[u8]>>,  // 256-byte boot ROM image; None = skip boot ROM
+    boot_rom_mapped: bool,         // true until the game writes 0xFF50 to unmap it
 }
 
 #[expect(clippy::upper_case_acronyms)]
@@ -66,12 +68,14 @@ enum MemoryRegion {
 }
 
 impl MMU {
-    pub(crate) fn new(cartridge: Box<dyn Cartridge>) -> Self {
+    pub(crate) fn new(cartridge: Box<dyn Cartridge>, boot_rom: Option<Box<[u8]>>) -> Self {
         MMU {
             devices: Devices::new(cartridge),
             interrupts: Interrupts::new(),
             hram: [0x00; 0x7F],
             wram: [0x00; 0x2000],
+            boot_rom_mapped: boot_rom.is_some(),
+            boot_rom,
         }
     }
 
@@ -166,6 +170,12 @@ impl MMU {
                 self.devices.ppu.write_byte(0xFF46, value); // record for reads
             }
             0xFF40..=0xFF45 | 0xFF47..=0xFF4B => self.devices.ppu.write_byte(address, value),
+            0xFF50 => {
+                // Writing any value to 0xFF50 unmaps the boot ROM.  On real
+                // hardware the boot ROM writes 0x01 here as its final act,
+                // handing control to the cartridge at 0x0100.
+                self.boot_rom_mapped = false;
+            }
             _ => (),
         }
         self.log_io_write(address, value);
@@ -174,6 +184,16 @@ impl MMU {
 
 impl Memory for MMU {
     fn read_byte(&self, address: u16) -> u8 {
+        // When the boot ROM is mapped it shadows cartridge addresses 0x0000–0x00FF.
+        // The boot ROM unmaps itself by writing to 0xFF50.
+        if self.boot_rom_mapped {
+            if let Some(ref rom) = self.boot_rom {
+                if (address as usize) < rom.len() {
+                    return rom[address as usize];
+                }
+            }
+        }
+
         match self.get_memory_region(address) {
             MemoryRegion::Cartridge => self.devices.cartridge.read_byte(address),
             MemoryRegion::PPU => self.devices.ppu.read_byte(address),

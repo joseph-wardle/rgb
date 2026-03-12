@@ -15,12 +15,33 @@ pub struct DMG {
 
 impl DMG {
     /// Creates a DMG starting from the post-boot-ROM register state (PC=0x0100).
-    /// Boot ROM emulation is not yet implemented, so this is the only way to
-    /// start the emulator.
+    /// This is the standard way to start the emulator without a boot ROM image.
+    /// To run an actual boot ROM, use [`DMG::new_with_boot_rom`] instead.
     pub fn new(cartridge: Box<dyn Cartridge>) -> Self {
         let dmg = Self {
             cpu: CPU::new(),
-            bus: MMU::new(cartridge),
+            bus: MMU::new(cartridge, None),
+        };
+        dmg.log_power_on();
+        dmg
+    }
+
+    /// Creates a DMG with a boot ROM image mapped at 0x0000–0x00FF.
+    ///
+    /// The CPU starts in the cold-start state (PC=0x0000, all registers zero)
+    /// and will execute the boot ROM, which initialises hardware registers,
+    /// displays the Nintendo logo, and jumps to 0x0100 when done.
+    ///
+    /// The boot ROM unmaps itself by writing to 0xFF50.  At that point the
+    /// emulator continues from the cartridge entry point.
+    ///
+    /// The DMG boot ROM image is copyrighted by Nintendo and is not included
+    /// here.  Many open-source alternatives (e.g. SameBoot, dmg_boot.bin) are
+    /// compatible and produce the correct post-boot register state.
+    pub fn new_with_boot_rom(cartridge: Box<dyn Cartridge>, boot_rom: Box<[u8]>) -> Self {
+        let dmg = Self {
+            cpu: CPU::new_cold(),
+            bus: MMU::new(cartridge, Some(boot_rom)),
         };
         dmg.log_power_on();
         dmg

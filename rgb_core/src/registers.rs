@@ -21,8 +21,8 @@ pub struct Registers {
 }
 
 impl Registers {
-    /// Register state after the DMG boot ROM completes. The emulator always
-    /// starts here because boot ROM emulation is not yet implemented.
+    /// Register state after the DMG boot ROM completes.
+    /// The emulator starts here when no boot ROM is provided.
     ///
     /// Values taken from Pan Docs § "Power Up Sequence":
     /// A=01 F=B0 B=00 C=13 D=00 E=D8 H=01 L=4D SP=FFFE PC=0100
@@ -39,6 +39,13 @@ impl Registers {
             sp: 0xFFFE,
             pc: 0x0100,
         }
+    }
+
+    /// Register state when the hardware first powers on, before the boot ROM
+    /// runs.  Used when a boot ROM image is provided to `DMG::new`; the boot
+    /// ROM will initialise these registers to the post-boot values as it runs.
+    pub(crate) fn cold_start() -> Self {
+        Self::default() // all zeros; PC = 0x0000
     }
 
     pub fn get_af(&self) -> u16 {

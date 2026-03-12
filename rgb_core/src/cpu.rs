@@ -633,6 +633,17 @@ impl CPU {
         }
     }
 
+    pub(crate) fn new_cold() -> Self {
+        Self {
+            reg: Registers::cold_start(),
+            clock: Clock::default(),
+            halt_state: HaltState::Running,
+            ime: false,
+            ime_scheduled: None,
+            halt_bug: false,
+        }
+    }
+
     #[inline]
     fn enter_halt_mode(&mut self) {
         self.halt_state = HaltState::Halted;
