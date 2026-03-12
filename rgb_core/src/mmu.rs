@@ -149,8 +149,8 @@ impl MMU {
                 }
             }
             0xFF04 => self.devices.timer.reset_divider(),
-            0xFF05 => self.devices.timer.tima = value,
-            0xFF06 => self.devices.timer.tma = value,
+            0xFF05 => self.devices.timer.write_tima(value),
+            0xFF06 => self.devices.timer.write_tma(value),
             0xFF07 => self.devices.timer.tac = value,
             0xFF0F => self.interrupts.flag = value,
             0xFFFF => self.interrupts.enable = value,
