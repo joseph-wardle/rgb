@@ -79,23 +79,6 @@ impl MMU {
         }
     }
 
-    pub(crate) fn step(&mut self, cycles: u16) {
-        // Snapshot the system counter before the timer advances so the APU
-        // can detect falling edges (frame sequencer, etc.) over the same span.
-        let counter_before = self.devices.timer.system_counter();
-        self.devices.timer.step(cycles, &mut self.interrupts.flag);
-        self.devices.ppu.step(cycles, &mut self.interrupts.flag);
-        self.devices.apu.step(cycles, counter_before);
-        self.log_step(
-            cycles,
-            self.devices.timer.div(),
-            self.devices.timer.tima,
-            self.devices.timer.tma,
-            self.devices.timer.tac,
-            self.interrupts.flag,
-            self.interrupts.enable,
-        );
-    }
 
     fn get_memory_region(&self, address: u16) -> MemoryRegion {
         match address {
@@ -223,7 +206,31 @@ impl Memory for MMU {
     }
 }
 
-impl MemoryBus for MMU {}
+impl MemoryBus for MMU {
+    /// Advance all hardware devices by exactly one machine cycle (4 T-cycles).
+    ///
+    /// Called by the CPU after each M-cycle of instruction execution — opcode
+    /// fetch, operand fetch, memory read, memory write, or internal delay.
+    /// Stepping devices here, interleaved with the CPU's bus accesses, gives
+    /// the timer, PPU, and APU the correct device state at every bus access.
+    fn tick_m_cycle(&mut self) {
+        // Capture the counter before the timer advances so the APU can detect
+        // falling edges (frame sequencer bit 12) over this 4-T-cycle window.
+        let counter_before = self.devices.timer.system_counter();
+        self.devices.timer.step(4, &mut self.interrupts.flag);
+        self.devices.ppu.step(4, &mut self.interrupts.flag);
+        self.devices.apu.step(4, counter_before);
+        self.log_step(
+            4,
+            self.devices.timer.div(),
+            self.devices.timer.tima,
+            self.devices.timer.tma,
+            self.devices.timer.tac,
+            self.interrupts.flag,
+            self.interrupts.enable,
+        );
+    }
+}
 
 impl MMU {
     pub(crate) fn serial(&self) -> &Serial {

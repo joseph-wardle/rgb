@@ -53,15 +53,14 @@ impl DMG {
         let mut consumed: u32 = 0;
 
         while consumed < CYCLES_PER_FRAME {
-            // Each iteration advances the CPU by one instruction and then tells
-            // other clocked subsystems how many machine cycles it took.
+            // The CPU ticks all hardware devices (timer, PPU, APU) M-cycle-by-
+            // M-cycle as it executes each instruction via MemoryBus::tick_m_cycle.
+            // No separate bus.step() call is needed here.
             let cycles = self.cpu.step(&mut self.bus);
             consumed += cycles as u32;
-            self.bus.step(cycles.into());
 
             if let Some(extra) = self.cpu.service_interrupts(&mut self.bus) {
                 consumed += extra as u32;
-                self.bus.step(extra.into());
             }
         }
         self.log_frame_done(consumed);
