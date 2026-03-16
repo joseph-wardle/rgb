@@ -24,17 +24,9 @@ mod audio;
 /// Audio output sample rate in Hz.  Must match the APU's SAMPLE_RATE.
 const SAMPLE_RATE: u32 = 44_100;
 
-// ---------------------------------------------------------------------------
-// Frame pacing
-// ---------------------------------------------------------------------------
-
 /// The DMG runs at 4,194,304 Hz (T-cycles) and draws 70,224 T-cycles per
 /// frame, giving 4,194,304 / 70,224 ≈ 59.7273 frames per second.
 const FRAME_DURATION: Duration = Duration::from_nanos(16_742_706);
-
-// ---------------------------------------------------------------------------
-// Key → Button mapping
-// ---------------------------------------------------------------------------
 
 /// Maps host keyboard keys to DMG joypad buttons.
 ///
@@ -53,16 +45,8 @@ const KEY_MAP: &[(Key, Button)] = &[
     (Key::RightShift, Button::Select),
 ];
 
-// ---------------------------------------------------------------------------
-// Shade palette
-// ---------------------------------------------------------------------------
-
 /// Converts a framebuffer of shade indices (0–3) into a buffer of 32-bit
 /// RGB pixels (0x00RRGGBB) for minifb.
-///
-/// The four colours approximate the original DMG screen's yellowish-green
-/// phosphor. The core only emits indices; the frontend owns the palette so
-/// it can be changed here without touching the emulator.
 fn shade_to_rgb(framebuffer: &[u8]) -> Vec<u32> {
     const PALETTE: [u32; 4] = [
         0xE0F8D0, // shade 0: lightest (off-white green)
@@ -76,12 +60,8 @@ fn shade_to_rgb(framebuffer: &[u8]) -> Vec<u32> {
         .collect()
 }
 
-// ---------------------------------------------------------------------------
-// Entry point
-// ---------------------------------------------------------------------------
-
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // --- Parse arguments ----------------------------------------------------
+    // Parse arguments
     let args: Vec<String> = env::args().collect();
     let rom_path = args.get(1).cloned().unwrap_or_else(|| {
         eprintln!("Usage: rgb <rom.gb> [--boot-rom <boot.bin>]");
@@ -109,7 +89,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         None
     };
 
-    // --- Load cartridge -----------------------------------------------------
+    // Load cartridge
     let rom = fs::read(&rom_path)?;
     let cartridge = CartridgeKind::from_bytes(rom)?;
     let title = cartridge.info().title.clone();
@@ -126,16 +106,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         dmg.load_save_data(&save_bytes);
     }
 
-    // --- Open audio device --------------------------------------------------
-    // AudioOutput opens the default device and starts streaming in a background
-    // thread.  If audio is unavailable the emulator runs silently.
+    // Open audio device
     let mut audio = audio::AudioOutput::open(SAMPLE_RATE);
     if audio.is_none() {
         eprintln!("warning: no audio device available; running without sound");
     }
 
-    // --- Open window --------------------------------------------------------
-    // The window title shows the ROM name so you can tell which game is running.
+    // Open window
     let window_title = if title.is_empty() {
         "rgb".to_string()
     } else {
@@ -146,10 +123,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         &window_title,
         SCREEN_WIDTH,
         SCREEN_HEIGHT,
-        WindowOptions::default(),
+        WindowOptions {
+            scale: minifb::Scale::X4,
+            ..WindowOptions::default()
+        },
     )?;
 
-    // --- Main loop ----------------------------------------------------------
+    // Main loop
     while window.is_open() && !window.is_key_down(Key::Escape) {
         let frame_start = Instant::now();
 

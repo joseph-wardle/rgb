@@ -1086,6 +1086,17 @@ impl CPU {
 
             // HALT
             0x76 => {
+                let _ie = mmu.read_byte(0xFFFF);
+                let _if = mmu.read_byte(0xFF0F);
+                let _pending = _ie & _if;
+                eprintln!(
+                    "HALT@{:04X} ime={} IE={:02X} IF={:02X} pending={:02X}",
+                    self.reg.pc.wrapping_sub(1),
+                    self.ime,
+                    _ie,
+                    _if,
+                    _pending
+                );
                 if !self.ime && self.pending_interrupt_mask(mmu) != 0 {
                     self.trigger_halt_bug();
                 } else {
@@ -2150,5 +2161,28 @@ mod tests {
         }
 
         eprintln!("serial output: '{}'", gb.serial_output());
+
+        eprintln!("RAM @A000:");
+        eprintln!("  A000 (status) = {:02X}", gb.peek_byte(0xA000));
+        eprintln!(
+            "  A001-A003 (magic) = {:02X} {:02X} {:02X}",
+            gb.peek_byte(0xA001),
+            gb.peek_byte(0xA002),
+            gb.peek_byte(0xA003)
+        );
+        eprintln!("  text @A004:");
+        let mut text = String::new();
+        for i in 0u16..300 {
+            let b = gb.peek_byte(0xA004 + i);
+            if b == 0 {
+                break;
+            }
+            text.push(if b.is_ascii_graphic() || b == b' ' || b == b'\n' {
+                b as char
+            } else {
+                '?'
+            });
+        }
+        eprintln!("  {text:?}");
     }
 }
