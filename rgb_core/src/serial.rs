@@ -65,9 +65,14 @@ impl Serial {
         let raw = value;
         self.sc = value;
         let start_transfer = (raw & 0x80) != 0;
+        // Bit 0 = 1 means internal clock (this GB drives the transfer).
+        // Bit 0 = 0 means external clock (slave mode: waits for another GB).
+        // Without a second Game Boy, an external-clock transfer never completes,
+        // so we must NOT fire the serial interrupt for it.
+        let internal_clock = (raw & 0x01) != 0;
         let mut transferred = None;
         let mut completed = false;
-        if start_transfer {
+        if start_transfer && internal_clock {
             let byte = self.sb;
             self.buffer.push(byte);
             self.sc &= 0x7F; // transfer complete
