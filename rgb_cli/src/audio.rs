@@ -1,9 +1,9 @@
-//! Audio output via cpal.
+//! Native audio output via cpal.
 //!
-//! [`AudioOutput`] opens the default audio device and streams interleaved
-//! stereo f32 samples from a ring buffer.  The emulator pushes samples into
-//! the producer end once per frame; the audio callback drains the consumer
-//! end in a separate thread at the hardware sample rate.
+//! [`NativeAudioSink`] opens the default audio device and streams interleaved
+//! stereo f32 samples from a ring buffer.  The emulator pushes samples via
+//! [`AudioSink::push_samples`] once per frame; the audio callback drains the
+//! ring buffer in a separate thread at the hardware sample rate.
 //!
 //! If the ring buffer runs empty (the emulator is running slow) the callback
 //! outputs silence rather than repeating the last sample, which avoids a
@@ -11,29 +11,29 @@
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{Device, SampleFormat, Stream, StreamConfig};
-use ringbuf::traits::{Consumer, Split};
+use rgb_frontend::AudioSink;
+use ringbuf::traits::{Consumer, Producer, Split};
 use ringbuf::{HeapCons, HeapProd, HeapRb};
 
 /// Capacity of the ring buffer in stereo sample pairs.
-/// ~100 ms at 44,100 Hz gives a comfortable margin between emulator frames
-/// and the audio callback without introducing noticeable latency.
-const RING_BUFFER_PAIRS: usize = 4096;
+/// ~370 ms at 44,100 Hz gives headroom to absorb the imprecision of
+/// thread::sleep frame pacing without the buffer running dry.
+const RING_BUFFER_PAIRS: usize = 16_384;
 
 /// Owns the cpal stream and the producer end of the sample ring buffer.
 ///
 /// Drop this to stop audio output; the stream stops when it is dropped.
-pub struct AudioOutput {
-    /// Push interleaved stereo f32 pairs (left, right) here each frame.
-    pub producer: HeapProd<f32>,
+pub struct NativeAudioSink {
+    producer: HeapProd<f32>,
     /// Kept alive so the stream is not dropped while the emulator runs.
     _stream: Stream,
 }
 
-impl AudioOutput {
+impl NativeAudioSink {
     /// Open the default audio device and start the output stream.
     ///
     /// Returns `None` if no audio device is available or the device cannot be
-    /// configured — the caller falls back to silent operation in that case.
+    /// configured — the caller falls back to [`SilentSink`] in that case.
     pub fn open(sample_rate: u32) -> Option<Self> {
         let host = cpal::default_host();
         let device = host.default_output_device()?;
@@ -48,6 +48,16 @@ impl AudioOutput {
             producer,
             _stream: stream,
         })
+    }
+}
+
+impl AudioSink for NativeAudioSink {
+    fn push_samples(&mut self, samples: &[f32]) {
+        for &sample in samples {
+            // Non-blocking push; if the buffer is full we drop the sample
+            // rather than blocking the emulator thread.
+            let _ = self.producer.try_push(sample);
+        }
     }
 }
 
@@ -75,8 +85,15 @@ fn build_stream(
         .build_output_stream(
             config,
             move |output: &mut [f32], _| {
+                // On underrun, hold the last real sample rather than jumping
+                // to silence.  A "frozen" sample is inaudible at these
+                // durations; a sudden drop to 0.0 produces a loud click.
+                let mut last = 0.0f32;
                 for sample in output.iter_mut() {
-                    *sample = consumer.try_pop().unwrap_or(0.0);
+                    if let Some(s) = consumer.try_pop() {
+                        last = s;
+                    }
+                    *sample = last;
                 }
             },
             |err| eprintln!("audio stream error: {err}"),
