@@ -103,6 +103,14 @@ pub(crate) const SAMPLE_RATE: u32 = 44_100;
 /// T-cycles per audio output sample.
 const SAMPLE_PERIOD_T: f32 = APU_CLOCK_HZ / SAMPLE_RATE as f32; // ≈ 95.1085
 
+/// System counter bit 12: the frame sequencer fires on each falling edge,
+/// producing a 512 Hz clock (one tick every 8,192 T-cycles).
+///
+/// This bit is also part of DIV (DIV bit 4, since DIV = counter bits 8–15),
+/// so a DIV write can trigger an immediate frame-sequencer tick — see
+/// [`APU::notify_div_reset`].
+const FRAME_SEQ_BIT: u16 = 1 << 12;
+
 // ---------------------------------------------------------------------------
 // APU
 // ---------------------------------------------------------------------------
@@ -128,8 +136,6 @@ pub(crate) struct APU {
     pub on: bool,
 
     // --- Timing state ---
-    /// T-cycle countdown to the next frame-sequencer tick (fires at 512 Hz).
-    frame_seq_timer: u32,
     /// Current step of the 8-step frame-sequencer cycle (0–7).
     frame_seq_step: u8,
     /// Fractional T-cycle accumulator for sample generation.
@@ -148,24 +154,57 @@ impl APU {
             nr50: 0,
             nr51: 0,
             on: false,
-            frame_seq_timer: 8192,
             frame_seq_step: 0,
             sample_timer: 0.0,
             samples: Vec::new(),
         }
     }
 
-    /// Advance the APU by `cycles` machine cycles (1 machine cycle = 4 T-cycles).
+    /// Advance the APU by `cycles` T-cycles.
     ///
-    /// Processes one T-cycle at a time: clocks channel frequency timers every
-    /// T-cycle, the frame sequencer every 8,192 T-cycles, and outputs a stereo
-    /// sample pair roughly every 95 T-cycles (44,100 Hz).
-    pub(crate) fn step(&mut self, cycles: u16) {
+    /// `prev_counter` is the system counter value at the start of this step
+    /// (read from the timer before it advances).  The APU uses it to detect
+    /// falling edges on the frame-sequencer bit (bit 12) without owning the
+    /// system counter directly.
+    ///
+    /// Channel frequency timers are clocked once per T-cycle.  The frame
+    /// sequencer fires at 512 Hz via falling-edge detection on counter bit 12.
+    /// Audio samples are pushed at roughly 44,100 Hz.
+    pub(crate) fn step(&mut self, cycles: u16, prev_counter: u16) {
         if !self.on {
             return;
         }
-        for _ in 0..(cycles * 4) {
-            self.tick();
+        let mut counter = prev_counter;
+        // Process one machine cycle (4 T-cycles) at a time so the frame
+        // sequencer edge can be detected at M-cycle granularity.
+        for _ in 0..cycles / 4 {
+            let next_counter = counter.wrapping_add(4);
+
+            // Frame sequencer: 512 Hz clock from system counter bit 12.
+            // One tick fires on each falling edge (bit transitions 1 → 0).
+            if counter & FRAME_SEQ_BIT != 0 && next_counter & FRAME_SEQ_BIT == 0 {
+                self.clock_frame_sequencer();
+            }
+
+            counter = next_counter;
+
+            // Clock channel timers and sample output four times (one per T-cycle).
+            self.tick_t();
+            self.tick_t();
+            self.tick_t();
+            self.tick_t();
+        }
+    }
+
+    /// Called by the MMU when the game writes to 0xFF04 (DIV reset).
+    ///
+    /// Resetting the system counter to zero creates a falling edge on any
+    /// counter bit that was previously 1.  If bit 12 was set, the frame
+    /// sequencer fires immediately — exactly as it would from a natural
+    /// falling edge during [`step`].
+    pub(crate) fn notify_div_reset(&mut self, old_counter: u16) {
+        if self.on && old_counter & FRAME_SEQ_BIT != 0 {
+            self.clock_frame_sequencer();
         }
     }
 
@@ -182,21 +221,14 @@ impl APU {
     // Private: per-T-cycle tick
     // -----------------------------------------------------------------------
 
-    fn tick(&mut self) {
-        // 1. Clock channel frequency timers.
+    /// Clock all channel frequency timers and advance sample output by one T-cycle.
+    fn tick_t(&mut self) {
         self.ch1.tick_timer();
         self.ch2.tick_timer();
         self.ch3.tick_timer();
         self.ch4.tick_timer();
 
-        // 2. Frame sequencer: fires at 512 Hz (every 8,192 T-cycles).
-        self.frame_seq_timer -= 1;
-        if self.frame_seq_timer == 0 {
-            self.frame_seq_timer = 8192;
-            self.clock_frame_sequencer();
-        }
-
-        // 3. Sample output: accumulate until we've consumed one sample's worth.
+        // Sample output: accumulate until we've consumed one sample's worth.
         self.sample_timer += 1.0;
         if self.sample_timer >= SAMPLE_PERIOD_T {
             self.sample_timer -= SAMPLE_PERIOD_T;
@@ -347,11 +379,25 @@ impl APU {
     }
 
     /// Clear all channel and control registers.  Called when NR52 bit 7 → 0.
+    ///
+    /// On DMG, length counters survive APU power-off — only control, frequency,
+    /// and envelope registers are cleared.  This allows games to pre-load length
+    /// values before powering the APU on.
     fn power_off(&mut self) {
+        let lengths = [
+            self.ch1.length.value,
+            self.ch2.length.value,
+            self.ch3.length.value,
+            self.ch4.length.value,
+        ];
         self.ch1 = Channel1::default();
         self.ch2 = Channel2::default();
         self.ch3 = Channel3::default();
         self.ch4 = Channel4::default();
+        self.ch1.length.value = lengths[0];
+        self.ch2.length.value = lengths[1];
+        self.ch3.length.value = lengths[2];
+        self.ch4.length.value = lengths[3];
         self.nr50 = 0;
         self.nr51 = 0;
     }
@@ -397,9 +443,9 @@ impl Memory for APU {
     }
 
     fn write_byte(&mut self, address: u16, value: u8) {
-        // Wave RAM is always writable.
+        // Wave RAM is always writable (no trigger possible here; frame_seq_step unused).
         if matches!(address, 0xFF30..=0xFF3F) {
-            self.ch3.write(address, value);
+            self.ch3.write(address, value, 0);
             return;
         }
 
@@ -419,10 +465,18 @@ impl Memory for APU {
         }
 
         match address {
-            0xFF10..=0xFF14 => self.ch1.write(address, value),
-            0xFF15..=0xFF19 => self.ch2.write(address, value),
-            0xFF1A..=0xFF1E => self.ch3.write(address, value),
-            0xFF1F..=0xFF23 => self.ch4.write(address, value),
+            0xFF10..=0xFF14 => self.ch1.write(address, value, self.frame_seq_step),
+            0xFF15..=0xFF19 => self.ch2.write(address, value, self.frame_seq_step),
+            0xFF1A..=0xFF1E => {
+                // Ch3 trigger on DMG: apply wave RAM corruption *before* triggering.
+                // While Ch3 is active, the byte currently being read is accidentally
+                // re-latched into the first bytes of wave RAM (DMG hardware only).
+                if address == 0xFF1E && value & 0x80 != 0 {
+                    self.ch3.apply_dmg_trigger_corruption();
+                }
+                self.ch3.write(address, value, self.frame_seq_step);
+            }
+            0xFF1F..=0xFF23 => self.ch4.write(address, value, self.frame_seq_step),
             0xFF24 => self.nr50 = value,
             0xFF25 => self.nr51 = value,
             _ => {}

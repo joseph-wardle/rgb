@@ -16,4 +16,16 @@ pub trait Memory {
     }
 }
 
-pub trait MemoryBus: Memory {}
+pub trait MemoryBus: Memory {
+    /// Advance all clocked hardware (timer, PPU, APU) by one machine cycle (4 T-cycles).
+    ///
+    /// The CPU calls this after each M-cycle of execution — opcode fetch, operand
+    /// fetch, memory read, memory write, or an internal delay cycle.  Stepping
+    /// devices M-cycle-by-M-cycle, interleaved with instruction execution, is
+    /// what makes timer and PPU register reads/writes see the correct device state
+    /// at the precise cycle the CPU accesses them.
+    ///
+    /// The default implementation is a no-op so that test stubs do not need to
+    /// implement it.
+    fn tick_m_cycle(&mut self) {}
+}

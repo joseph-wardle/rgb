@@ -231,6 +231,17 @@ impl Header {
         let rom_banks = rom_bank_count(self.rom_size_code)?;
         let (ram_banks, ram_bank_size) = ram_bank_config(self.ram_size_code)?;
 
+        // Some ROMs declare a RAM-capable mapper type (e.g. MBC1+RAM, 0x02)
+        // but set ram_size_code=0x00, meaning the header omits a size even
+        // though the mapper chip physically has RAM.  Allocate a default 8 KiB
+        // bank so the cartridge RAM window (0xA000–0xBFFF) works correctly.
+        let (ram_banks, ram_bank_size) = if ram_banks == 0 && cart_type_has_ram(self.cartridge_type)
+        {
+            (1, 0x2000)
+        } else {
+            (ram_banks, ram_bank_size)
+        };
+
         Ok(CartridgeInfo {
             title: self.title.clone(),
             mapper,
@@ -253,6 +264,29 @@ impl MapperKind {
             other => Err(CartridgeError::UnsupportedCartridgeType(other)),
         }
     }
+}
+
+/// Whether a cartridge type byte declares on-cartridge RAM.
+///
+/// These are all type codes where the cart spec includes a RAM chip, regardless
+/// of what the ram_size_code field says.  Used to fix up headers that set
+/// ram_size_code=0x00 despite the mapper physically having RAM.
+fn cart_type_has_ram(cartridge_type: u8) -> bool {
+    matches!(
+        cartridge_type,
+        0x02        // MBC1+RAM
+        | 0x03      // MBC1+RAM+BATTERY
+        | 0x09      // MBC2+BATTERY (has nibble RAM built into MBC)
+        | 0x0C      // MMM01+RAM
+        | 0x0D      // MMM01+RAM+BATTERY
+        | 0x10      // MBC3+TIMER+RAM+BATTERY
+        | 0x12      // MBC3+RAM
+        | 0x13      // MBC3+RAM+BATTERY
+        | 0x1A      // MBC5+RAM
+        | 0x1B      // MBC5+RAM+BATTERY
+        | 0x1D      // MBC5+RUMBLE+RAM
+        | 0x1E // MBC5+RUMBLE+RAM+BATTERY
+    )
 }
 
 /// Whether a cartridge type byte indicates a battery is present.

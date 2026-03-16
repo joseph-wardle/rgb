@@ -1,12 +1,10 @@
 use crate::cartridge::Cartridge;
 use crate::cpu::CPU;
 use crate::input::Button;
-#[cfg(test)]
 use crate::memory::Memory;
 use crate::mmu::MMU;
 use crate::serial::Serial;
 
-// Architecture (grep: "Bus/Devices"):
 // DMG owns CPU + Bus. Bus (MMU) owns Devices + RAM + Interrupts.
 pub struct DMG {
     cpu: CPU,
@@ -15,7 +13,6 @@ pub struct DMG {
 
 impl DMG {
     /// Creates a DMG starting from the post-boot-ROM register state (PC=0x0100).
-    /// This is the standard way to start the emulator without a boot ROM image.
     /// To run an actual boot ROM, use [`DMG::new_with_boot_rom`] instead.
     pub fn new(cartridge: Box<dyn Cartridge>) -> Self {
         let dmg = Self {
@@ -53,15 +50,13 @@ impl DMG {
         let mut consumed: u32 = 0;
 
         while consumed < CYCLES_PER_FRAME {
-            // Each iteration advances the CPU by one instruction and then tells
-            // other clocked subsystems how many machine cycles it took.
+            // The CPU ticks all hardware devices (timer, PPU, APU) M-cycle-by-
+            // M-cycle as it executes each instruction via MemoryBus::tick_m_cycle.
             let cycles = self.cpu.step(&mut self.bus);
             consumed += cycles as u32;
-            self.bus.step(cycles.into());
 
             if let Some(extra) = self.cpu.service_interrupts(&mut self.bus) {
                 consumed += extra as u32;
-                self.bus.step(extra.into());
             }
         }
         self.log_frame_done(consumed);
@@ -130,10 +125,8 @@ impl DMG {
     }
 
     /// Notify the emulator that a host key mapped to `button` is now held.
-    ///
-    /// Call once per frame for every button that is currently pressed (not
-    /// just on the keydown edge). Triggers a joypad interrupt if the button's
-    /// row is selected and the button was previously released.
+    /// Triggers a joypad interrupt if the button's row is selected and
+    /// the button was previously released.
     pub fn press(&mut self, button: Button) {
         self.bus.press_button(button);
     }
@@ -145,9 +138,10 @@ impl DMG {
     }
 }
 
-#[cfg(test)]
 impl DMG {
-    pub(crate) fn peek_byte(&self, address: u16) -> u8 {
+    /// Read a single byte from the bus without advancing any hardware state.
+    /// Intended for test harnesses and debuggers — does not tick the clock.
+    pub fn peek_byte(&self, address: u16) -> u8 {
         self.bus.read_byte(address)
     }
 }

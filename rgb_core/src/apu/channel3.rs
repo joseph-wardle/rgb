@@ -46,7 +46,7 @@ impl Channel3 {
         }
     }
 
-    pub fn write(&mut self, address: u16, value: u8) {
+    pub fn write(&mut self, address: u16, value: u8, frame_seq_step: u8) {
         match address {
             0xFF1A => {
                 self.dac_on = value & 0x80 != 0;
@@ -67,13 +67,42 @@ impl Channel3 {
                 self.freq = (self.freq & 0x0FF) | (((value & 0x07) as u16) << 8);
                 self.length.enabled = value & 0x40 != 0;
                 if value & 0x80 != 0 {
-                    self.trigger();
+                    self.trigger(frame_seq_step);
                 }
             }
             0xFF30..=0xFF3F => {
                 self.wave_ram[(address - 0xFF30) as usize] = value;
             }
             _ => {}
+        }
+    }
+
+    /// Apply DMG-specific wave RAM corruption that occurs when Ch3 is triggered
+    /// while it is actively reading samples.  CGB does not exhibit this behaviour.
+    ///
+    /// On DMG, if Ch3 is currently enabled at the moment of a trigger write, the
+    /// byte being read from wave RAM is "accidentally" re-latched, overwriting the
+    /// first bytes with data from the current wave position:
+    ///
+    /// - If the wave position is in the **first 4 bytes** (nibble positions 0–7),
+    ///   only the byte currently being read is copied to position 0.
+    /// - Otherwise, all 4 bytes of the **aligned 4-byte block** containing the
+    ///   current position are copied to bytes 0–3.
+    ///
+    /// The APU must call this *before* routing the trigger write to `write()`.
+    pub fn apply_dmg_trigger_corruption(&mut self) {
+        if !self.enabled {
+            return;
+        }
+        let byte_pos = (self.phase / 2) as usize;
+        if byte_pos < 4 {
+            // The single byte being read is re-latched into position 0.
+            self.wave_ram[0] = self.wave_ram[byte_pos];
+        } else {
+            // The entire aligned 4-byte block containing the current position
+            // is copied over bytes 0–3.
+            let block_start = byte_pos & !3;
+            self.wave_ram.copy_within(block_start..block_start + 4, 0);
         }
     }
 
@@ -100,12 +129,23 @@ impl Channel3 {
         }
     }
 
-    fn trigger(&mut self) {
+    fn trigger(&mut self, frame_seq_step: u8) {
         self.enabled = self.dac_on;
         if self.length.value == 0 {
             self.length.value = 256;
         }
-        self.freq_timer = (2048 - self.freq) * 2;
-        self.phase = 0;
+        // Note: phase is intentionally NOT reset here.  On real hardware, triggering
+        // Ch3 does not reset the wave position; the channel resumes from wherever it
+        // left off.  Only the frequency timer is reloaded.  The +3 T-cycle startup
+        // delay is a hardware quirk: Ch3 takes 3 extra T-cycles before it begins
+        // reading samples after a trigger.
+        self.freq_timer = (2048 - self.freq) * 2 + 3;
+
+        // Extra length clock when the frame sequencer's next step won't clock
+        // length (next step is odd: 1, 3, 5, 7 — `frame_seq_step` already
+        // points at the next step because it was incremented after the last tick).
+        if self.length.enabled && frame_seq_step & 1 == 1 && self.length.clock() {
+            self.enabled = false;
+        }
     }
 }
