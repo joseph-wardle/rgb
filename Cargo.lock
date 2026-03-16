@@ -1806,11 +1806,8 @@ dependencies = [
 name = "rgb_frontend"
 version = "0.0.1"
 dependencies = [
- "js-sys",
  "pixels",
  "rgb_core",
- "wasm-bindgen",
- "web-sys",
  "winit",
 ]
 
@@ -1821,10 +1818,8 @@ dependencies = [
  "console_error_panic_hook",
  "js-sys",
  "rgb_core",
- "rgb_frontend",
  "wasm-bindgen",
  "web-sys",
- "winit",
 ]
 
 [[package]]

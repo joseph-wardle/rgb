@@ -1,12 +1,13 @@
-//! `rgb_frontend` — shared emulator shell for `rgb`.
+//! `rgb_frontend` — native desktop emulator shell for `rgb`.
 //!
-//! This crate provides the platform-independent frontend: window management
+//! This crate provides the native desktop frontend: window management
 //! (winit), GPU-accelerated rendering (pixels), input mapping, frame timing,
 //! and an audio trait that platform crates implement.
 //!
-//! Consumer crates (`rgb_cli` for native, `rgb_web` for the browser) provide
-//! a thin entry point that loads the ROM, creates an [`AudioSink`], and calls
-//! [`run`] to hand control to the emulator loop.
+//! `rgb_cli` uses this crate for the native binary.  The browser build
+//! (`rgb_web`) implements its own lightweight loop directly via `web_sys`,
+//! but may depend on this crate for the shared [`AudioSink`] trait and
+//! palette definitions.
 
 pub mod app;
 pub mod audio;
@@ -38,12 +39,6 @@ pub struct EmulatorConfig {
     pub title: String,
     /// Integer scale factor for the initial window size (e.g. 4 → 640×576).
     pub scale: u32,
-    /// On WASM: if provided, winit attaches to the existing `<canvas>` with
-    /// this DOM id rather than creating a new element and appending it to
-    /// `document.body`.  Use this to place the emulator canvas at a specific
-    /// location on the page (e.g. inside a portfolio article embed).
-    #[cfg(target_arch = "wasm32")]
-    pub canvas_id: Option<String>,
 }
 
 /// Returned by [`run`] after the window is closed so the caller can persist
