@@ -64,14 +64,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     // ── Open audio ───────────────────────────────────────────────────
-    let audio: Box<dyn rgb_frontend::AudioSink> =
-        match audio::NativeAudioSink::open(SAMPLE_RATE) {
-            Some(sink) => Box::new(sink),
-            None => {
-                eprintln!("warning: no audio device available; running without sound");
-                Box::new(SilentSink)
-            }
-        };
+    let audio: Box<dyn rgb_frontend::AudioSink> = match audio::NativeAudioSink::open(SAMPLE_RATE) {
+        Some(sink) => Box::new(sink),
+        None => {
+            eprintln!("warning: no audio device available; running without sound");
+            Box::new(SilentSink)
+        }
+    };
 
     // ── Build config and run ─────────────────────────────────────────
     let window_title = if title.is_empty() {
@@ -92,14 +91,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let result = rgb_frontend::run(config)?;
 
     // ── Persist save data ────────────────────────────────────────────
-    if let Some(data) = result.save_data {
-        if let Err(e) = fs::write(&save_path, &data) {
+    if let Some(data) = result.save_data
+        && let Err(e) = fs::write(&save_path, &data) {
             eprintln!(
                 "warning: could not write save file {}: {e}",
                 save_path.display()
             );
         }
-    }
 
     Ok(())
 }

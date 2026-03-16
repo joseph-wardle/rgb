@@ -13,13 +13,13 @@
 //! This is intentionally structured like a readable main loop rather than
 //! a deeply layered abstraction.
 
+use crate::EmulatorConfig;
+use crate::EmulatorResult;
 use crate::audio::AudioSink;
 use crate::input;
 use crate::palette::{self, Palette};
 use crate::renderer;
 use crate::timing::FramePacer;
-use crate::EmulatorConfig;
-use crate::EmulatorResult;
 use pixels::Pixels;
 use rgb_core::gameboy::DMG;
 use rgb_core::{SCREEN_HEIGHT, SCREEN_WIDTH};
@@ -132,10 +132,7 @@ impl ApplicationHandler for App {
         let mut attrs = Window::default_attributes()
             .with_title(&self.title)
             .with_inner_size(size)
-            .with_min_inner_size(LogicalSize::new(
-                SCREEN_WIDTH as u32,
-                SCREEN_HEIGHT as u32,
-            ));
+            .with_min_inner_size(LogicalSize::new(SCREEN_WIDTH as u32, SCREEN_HEIGHT as u32));
 
         // On WASM, attach winit to a pre-existing <canvas> by id if one was
         // provided; otherwise append a new canvas to document.body.
@@ -244,11 +241,10 @@ impl ApplicationHandler for App {
 
             // ── Resize ───────────────────────────────────────────────
             WindowEvent::Resized(size) => {
-                if size.width > 0 && size.height > 0 {
-                    if let Some(ref mut pixels) = self.pixels {
+                if size.width > 0 && size.height > 0
+                    && let Some(ref mut pixels) = self.pixels {
                         let _ = pixels.resize_surface(size.width, size.height);
                     }
-                }
             }
 
             // ── Render ───────────────────────────────────────────────

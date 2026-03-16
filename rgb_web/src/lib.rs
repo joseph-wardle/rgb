@@ -30,8 +30,7 @@ use wasm_bindgen::prelude::*;
 pub fn start(rom: &[u8]) {
     console_error_panic_hook::set_once();
 
-    let cartridge = CartridgeKind::from_bytes(rom.to_vec())
-        .expect("failed to parse ROM");
+    let cartridge = CartridgeKind::from_bytes(rom.to_vec()).expect("failed to parse ROM");
 
     let title = cartridge.info().title.clone();
     let window_title = if title.is_empty() {
@@ -40,11 +39,10 @@ pub fn start(rom: &[u8]) {
         format!("rgb — {title}")
     };
 
-    let audio_sink: Box<dyn rgb_frontend::AudioSink> =
-        match audio::WebAudioSink::open() {
-            Some(sink) => Box::new(sink),
-            None => Box::new(SilentSink),
-        };
+    let audio_sink: Box<dyn rgb_frontend::AudioSink> = match audio::WebAudioSink::open() {
+        Some(sink) => Box::new(sink),
+        None => Box::new(SilentSink),
+    };
 
     let config = EmulatorConfig {
         cartridge: Box::new(cartridge),
@@ -67,8 +65,7 @@ pub fn start(rom: &[u8]) {
     //
     // We use winit's built-in WASM support: it backs the Window with a
     // <canvas> element automatically.
-    let event_loop = winit::event_loop::EventLoop::new()
-        .expect("failed to create event loop");
+    let event_loop = winit::event_loop::EventLoop::new().expect("failed to create event loop");
 
     // run_app does not return on WASM (the browser event loop takes over).
     let _ = event_loop.run_app(&mut app);

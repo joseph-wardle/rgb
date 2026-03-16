@@ -36,6 +36,12 @@ pub struct FramePacer {
     frame_start_ms: f64,
 }
 
+impl Default for FramePacer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl FramePacer {
     pub fn new() -> Self {
         Self {
