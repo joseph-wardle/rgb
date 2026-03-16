@@ -118,7 +118,10 @@ impl MMU {
             0xFFFF => self.interrupts.enable,
             0xFF10..=0xFF3F => self.devices.apu.read_byte(address),
             0xFF40..=0xFF4B => self.devices.ppu.read_byte(address),
-            _ => 0,
+            // Unimplemented IO registers read as 0xFF on real DMG hardware.
+            // Returning 0x00 here causes CGB+DMG games to misidentify themselves
+            // as running on a CGB (e.g. reading KEY1 at 0xFF4D expects 0xFF on DMG).
+            _ => 0xFF,
         };
         self.log_io_read(address, value);
         value
