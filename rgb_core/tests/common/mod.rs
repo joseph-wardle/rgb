@@ -33,6 +33,7 @@ fn run_rom(path: &Path) -> String {
     for frame in 0..MAX_FRAMES {
         gb.step_frame();
 
+        // --- Serial output path (cpu_instrs, instr_timing, mem_timing, …) ---
         let serial = gb.serial();
         let len = serial.len();
         if len != last_serial_len {
@@ -41,6 +42,26 @@ fn run_rom(path: &Path) -> String {
             if out.contains("Passed") || out.contains("Failed") {
                 return out;
             }
+        }
+
+        // --- RAM output path (halt_bug, mem_timing-2, oam_bug, dmg_sound) ---
+        // Blargg's shell writes a 3-byte signature to 0xA001–0xA003, a status
+        // byte to 0xA000 (0x80 = still running), and null-terminated text at
+        // 0xA004.  Poll every frame and return as soon as the test finishes.
+        if gb.peek_byte(0xA001) == 0xDE
+            && gb.peek_byte(0xA002) == 0xB0
+            && gb.peek_byte(0xA003) == 0x61
+            && gb.peek_byte(0xA000) != 0x80
+        {
+            let mut out = String::new();
+            for i in 0..256u16 {
+                let b = gb.peek_byte(0xA004 + i);
+                if b == 0 {
+                    break;
+                }
+                out.push(b as char);
+            }
+            return out;
         }
 
         if start.elapsed() >= TIMEOUT {

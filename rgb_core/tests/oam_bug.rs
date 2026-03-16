@@ -28,7 +28,6 @@ fn oam_bug_causes() {
 }
 
 #[test]
-#[ignore = "requires full PPU timing implementation"]
 fn oam_bug_non_causes() {
     let out = run_blargg_rom(&oam_path("3-non_causes.gb"));
     assert_passed(&out);

@@ -293,7 +293,7 @@ impl PPU {
             return; // row 0 is immune; guard against out-of-Mode-2 calls
         }
 
-        let n = row * 8;       // byte offset of row N in OAM
+        let n = row * 8; // byte offset of row N in OAM
         let p = (row - 1) * 8; // byte offset of row N−1 in OAM
 
         // Read the three 16-bit words used by both formulas.

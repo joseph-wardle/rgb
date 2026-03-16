@@ -79,7 +79,6 @@ impl MMU {
         }
     }
 
-
     fn get_memory_region(&self, address: u16) -> MemoryRegion {
         match address {
             0x0000..=0x7FFF => MemoryRegion::Cartridge,

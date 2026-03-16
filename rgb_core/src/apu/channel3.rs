@@ -144,10 +144,8 @@ impl Channel3 {
         // Extra length clock when the frame sequencer's next step won't clock
         // length (next step is odd: 1, 3, 5, 7 — `frame_seq_step` already
         // points at the next step because it was incremented after the last tick).
-        if self.length.enabled && frame_seq_step & 1 == 1 {
-            if self.length.clock() {
-                self.enabled = false;
-            }
+        if self.length.enabled && frame_seq_step & 1 == 1 && self.length.clock() {
+            self.enabled = false;
         }
     }
 }

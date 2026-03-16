@@ -1,7 +1,4 @@
 //! CPU execution engine for the DMG Game Boy (see Pan Docs for reference).
-//!
-//! The design here deliberately favours readability and small, well-named helpers
-//! so the control flow can be studied without mental gymnastics.
 
 mod opcode;
 
@@ -75,7 +72,6 @@ impl Default for CPU {
         Self::new()
     }
 }
-
 
 /// Read one byte from the bus and tick all hardware by one M-cycle (4 T-cycles).
 ///
@@ -152,13 +148,15 @@ impl CPU {
 }
 
 impl CPU {
-    // Add n to A
-    // n = A,B,C,D,E,H,L,(HL),imm8
-    //
-    // ZERO       - Set if result is zero
-    // SUBTRACT   - Reset
-    // HALF_CARRY - Set if carry from bit 3
-    // CARRY      - Set if carry from bit 7
+    /// Add `n` to `A`.\
+    /// `n` = `A`, `B`, `C`, `D`, `E`, `H`, `L`, `(HL)`, `imm8`
+    ///
+    /// | Flag       | Effect                  |
+    /// | ---------- | ----------------------- |
+    /// | ZERO       | Set if result is zero   |
+    /// | SUBTRACT   | Reset                   |
+    /// | HALF_CARRY | Set if carry from bit 3 |
+    /// | CARRY      | Set if carry from bit 7 |
     fn add(&mut self, n: u8) {
         let a = self.reg.a;
         let result = a.wrapping_add(n);
@@ -172,13 +170,15 @@ impl CPU {
         self.reg.a = result;
     }
 
-    // Add n + carry flag to A
-    // n = A,B,C,D,E,H,L,(HL),imm8
-    //
-    // ZERO       - Set if result is zero
-    // SUBTRACT   - Reset
-    // HALF_CARRY - Set if carry from bit 3
-    // CARRY      - Set if carry from bit 7
+    /// Add `n` + carry flag to `A`.\
+    /// `n` = `A`, `B`, `C`, `D`, `E`, `H`, `L`, `(HL)`, `imm8`
+    ///
+    /// | Flag       | Effect                  |
+    /// | ---------- | ----------------------- |
+    /// | ZERO       | Set if result is zero   |
+    /// | SUBTRACT   | Reset                   |
+    /// | HALF_CARRY | Set if carry from bit 3 |
+    /// | CARRY      | Set if carry from bit 7 |
     fn adc(&mut self, n: u8) {
         let a = self.reg.a;
         let carry = self.reg.get_flag(CARRY) as u8;
@@ -194,13 +194,15 @@ impl CPU {
         self.reg.a = result;
     }
 
-    // Subtract n from A
-    // n = A,B,C,D,E,H,L,(HL),imm8
-    //
-    // ZERO       - Set if result is zero
-    // SUBTRACT   - Set
-    // HALF_CARRY - Set if no borrow from bit 4
-    // CARRY      - Set if no borrow
+    /// Subtract `n` from `A`.\
+    /// `n` = `A`, `B`, `C`, `D`, `E`, `H`, `L`, `(HL)`, `imm8`
+    ///
+    /// | Flag       | Effect                       |
+    /// | ---------- | ---------------------------- |
+    /// | ZERO       | Set if result is zero        |
+    /// | SUBTRACT   | Set                          |
+    /// | HALF_CARRY | Set if no borrow from bit 4  |
+    /// | CARRY      | Set if no borrow             |
     fn sub(&mut self, n: u8) {
         let a = self.reg.a;
         let result = a.wrapping_sub(n);
@@ -213,13 +215,15 @@ impl CPU {
         self.reg.a = result;
     }
 
-    // Subtract n + carry flag from A
-    // n = A,B,C,D,E,H,L,(HL),imm8
-    //
-    // ZERO       - Set if result is zero
-    // SUBTRACT   - Set
-    // HALF_CARRY - Set if no borrow from bit 4
-    // CARRY      - Set if no borrow
+    /// Subtract `n` + carry flag from `A`.\
+    /// `n` = `A`, `B`, `C`, `D`, `E`, `H`, `L`, `(HL)`, `imm8`
+    ///
+    /// | Flag       | Effect                       |
+    /// | ---------- | ---------------------------- |
+    /// | ZERO       | Set if result is zero        |
+    /// | SUBTRACT   | Set                          |
+    /// | HALF_CARRY | Set if no borrow from bit 4  |
+    /// | CARRY      | Set if no borrow             |
     fn sbc(&mut self, n: u8) {
         let a = self.reg.a;
         let carry = self.reg.get_flag(CARRY) as u8;
@@ -235,13 +239,15 @@ impl CPU {
         self.reg.a = result;
     }
 
-    // Logical AND n with A, result in A
-    // n = A,B,C,D,E,H,L,(HL),imm8
-    //
-    // ZERO       - Set if result is zero
-    // SUBTRACT   - Reset
-    // HALF_CARRY - Set
-    // CARRY      - Reset
+    /// Logical AND `n` with `A`, result in `A`.\
+    /// `n` = `A`, `B`, `C`, `D`, `E`, `H`, `L`, `(HL)`, `imm8`
+    ///
+    /// | Flag       | Effect                  |
+    /// | ---------- | ----------------------- |
+    /// | ZERO       | Set if result is zero   |
+    /// | SUBTRACT   | Reset                   |
+    /// | HALF_CARRY | Set                     |
+    /// | CARRY      | Reset                   |
     fn and(&mut self, n: u8) {
         let result = self.reg.a & n;
 
@@ -253,13 +259,15 @@ impl CPU {
         self.reg.a = result;
     }
 
-    // Logical OR n with register A, result in A
-    // n = A,B,C,D,E,H,L,(HL),imm8
-    //
-    // ZERO       - Set if result is zero
-    // SUBTRACT   - Reset
-    // HALF_CARRY - Reset
-    // CARRY      - Reset
+    /// Logical OR `n` with `A`, result in `A`.\
+    /// `n` = `A`, `B`, `C`, `D`, `E`, `H`, `L`, `(HL)`, `imm8`
+    ///
+    /// | Flag       | Effect                  |
+    /// | ---------- | ----------------------- |
+    /// | ZERO       | Set if result is zero   |
+    /// | SUBTRACT   | Reset                   |
+    /// | HALF_CARRY | Reset                   |
+    /// | CARRY      | Reset                   |
     fn or(&mut self, n: u8) {
         let result = self.reg.a | n;
 
@@ -271,13 +279,15 @@ impl CPU {
         self.reg.a = result;
     }
 
-    // Logical exclusive OR n with register A, result in A
-    // n = A,B,C,D,E,H,L,(HL),imm8
-    //
-    // ZERO       - Set if result is zero
-    // SUBTRACT   - Reset
-    // HALF_CARRY - Reset
-    // CARRY      - Reset
+    /// Logical exclusive OR `n` with `A`, result in `A`.\
+    /// `n` = `A`, `B`, `C`, `D`, `E`, `H`, `L`, `(HL)`, `imm8`
+    ///
+    /// | Flag       | Effect                  |
+    /// | ---------- | ----------------------- |
+    /// | ZERO       | Set if result is zero   |
+    /// | SUBTRACT   | Reset                   |
+    /// | HALF_CARRY | Reset                   |
+    /// | CARRY      | Reset                   |
     fn xor(&mut self, n: u8) {
         let result = self.reg.a ^ n;
 
@@ -289,13 +299,15 @@ impl CPU {
         self.reg.a = result;
     }
 
-    // Compare A with n
-    // n = A,B,C,D,E,H,L,(HL),imm8
-    //
-    // ZERO       - Set if result is zero
-    // SUBTRACT   - Set
-    // HALF_CARRY - Set if no borrow from bit 4
-    // CARRY      - Set for no borrow
+    /// Compare `A` with `n`.\
+    /// `n` = `A`, `B`, `C`, `D`, `E`, `H`, `L`, `(HL)`, `imm8`
+    ///
+    /// | Flag       | Effect                       |
+    /// | ---------- | ---------------------------- |
+    /// | ZERO       | Set if result is zero        |
+    /// | SUBTRACT   | Set                          |
+    /// | HALF_CARRY | Set if no borrow from bit 4  |
+    /// | CARRY      | Set for no borrow            |
     fn cp(&mut self, n: u8) {
         let a = self.reg.a;
         let result = a.wrapping_sub(n);
@@ -306,13 +318,15 @@ impl CPU {
         self.reg.set_flag(CARRY, (a as u16) < (n as u16));
     }
 
-    // Increment register n
-    // n = A,B,C,D,E,H,L,(HL)
-    //
-    // ZERO       - Set if result is zero
-    // SUBTRACT   - Reset
-    // HALF_CARRY - Set if carry from bit 3
-    // CARRY      - Not affected
+    /// Increment register `n`.\
+    /// `n` = `A`, `B`, `C`, `D`, `E`, `H`, `L`, `(HL)`
+    ///
+    /// | Flag       | Effect                     |
+    /// | ---------- | -------------------------- |
+    /// | ZERO       | Set if result is zero      |
+    /// | SUBTRACT   | Reset                      |
+    /// | HALF_CARRY | Set if carry from bit 3    |
+    /// | CARRY      | Not affected               |
     fn inc(&mut self, n: u8) -> u8 {
         let result = n.wrapping_add(1);
 
@@ -323,13 +337,15 @@ impl CPU {
         result
     }
 
-    // Decrement register n
-    // n = A,B,C,D,E,H,L,(HL)
-    //
-    // ZERO       - Set if result is zero
-    // SUBTRACT   - Set
-    // HALF_CARRY - Set if no borrow from bit 4
-    // CARRY      - Not affected
+    /// Decrement register `n`.\
+    /// `n` = `A`, `B`, `C`, `D`, `E`, `H`, `L`, `(HL)`
+    ///
+    /// | Flag       | Effect                        |
+    /// | ---------- | ----------------------------- |
+    /// | ZERO       | Set if result is zero         |
+    /// | SUBTRACT   | Set                           |
+    /// | HALF_CARRY | Set if no borrow from bit 4   |
+    /// | CARRY      | Not affected                  |
     fn dec(&mut self, n: u8) -> u8 {
         let result = n.wrapping_sub(1);
 
@@ -340,13 +356,15 @@ impl CPU {
         result
     }
 
-    // Add n to HL
-    // n = BC,DE,HL,SP
-    //
-    // ZERO       - Not affected
-    // SUBTRACT   - Reset
-    // HALF_CARRY - Set if carry from bit 11
-    // CARRY      - Set if carry from bit 15
+    /// Add `n` to `HL`.\
+    /// `n` = `BC`, `DE`, `HL`, `SP`
+    ///
+    /// | Flag       | Effect                      |
+    /// | ---------- | --------------------------- |
+    /// | ZERO       | Not affected                |
+    /// | SUBTRACT   | Reset                       |
+    /// | HALF_CARRY | Set if carry from bit 11    |
+    /// | CARRY      | Set if carry from bit 15    |
     fn add_hl(&mut self, n: u16) {
         let hl = self.reg.get_hl();
         let result = hl.wrapping_add(n);
@@ -359,12 +377,14 @@ impl CPU {
         self.reg.set_hl(result);
     }
 
-    // Add signed imm8 to SP.
-    //
-    // ZERO       - Reset
-    // SUBTRACT   - Reset
-    // HALF_CARRY - Set if carry from bit 11
-    // CARRY      - Set if carry from bit 15
+    /// Add signed `imm8` to `SP`.\
+    ///
+    /// | Flag       | Effect                      |
+    /// | ---------- | --------------------------- |
+    /// | ZERO       | Reset                       |
+    /// | SUBTRACT   | Reset                       |
+    /// | HALF_CARRY | Set if carry from bit 11    |
+    /// | CARRY      | Set if carry from bit 15    |
     fn add_sp(&mut self, n: u8) {
         let sp = self.reg.sp;
         let n = n as i8 as i16 as u16;
@@ -382,13 +402,15 @@ impl CPU {
         self.reg.sp = result;
     }
 
-    // Swap upper & lower nibles of n
-    // n = A,B,C,D,E,H,L,(HL)
-    //
-    // ZERO       - Set if result is zero
-    // SUBTRACT   - Reset
-    // HALF_CARRY - Reset
-    // CARRY      - Reset
+    /// Swap upper and lower nibbles of `n`.\
+    /// `n` = `A`, `B`, `C`, `D`, `E`, `H`, `L`, `(HL)`
+    ///
+    /// | Flag       | Effect                  |
+    /// | ---------- | ----------------------- |
+    /// | ZERO       | Set if result is zero   |
+    /// | SUBTRACT   | Reset                   |
+    /// | HALF_CARRY | Reset                   |
+    /// | CARRY      | Reset                   |
     fn swap(&mut self, n: u8) -> u8 {
         let upper = n >> 4;
         let lower = n & 0x0F;
@@ -402,12 +424,14 @@ impl CPU {
         result
     }
 
-    // Decimal adjust register A
-    //
-    // ZERO       - Set if result is zero
-    // SUBTRACT   - Not affected
-    // HALF_CARRY - Reset
-    // CARRY      - Set or reset according to operation
+    /// Decimal adjust register `A`.\
+    ///
+    /// | Flag       | Effect                                       |
+    /// | ---------- | -------------------------------------------- |
+    /// | ZERO       | Set if result is zero                        |
+    /// | SUBTRACT   | Not affected                                 |
+    /// | HALF_CARRY | Reset                                        |
+    /// | CARRY      | Set or reset according to operation           |
     fn daa(&mut self) {
         const LOW_ADJUST: u8 = 0x06;
         const HIGH_ADJUST: u8 = 0x60;
@@ -446,12 +470,14 @@ impl CPU {
         self.reg.a = a;
     }
 
-    // Complement A
-    //
-    // ZERO       - Not affected
-    // SUBTRACT   - Set
-    // HALF_CARRY - Set
-    // CARRY      - Not affected
+    /// Complement `A`.\
+    ///
+    /// | Flag       | Effect                  |
+    /// | ---------- | ----------------------- |
+    /// | ZERO       | Not affected            |
+    /// | SUBTRACT   | Set                     |
+    /// | HALF_CARRY | Set                     |
+    /// | CARRY      | Not affected            |
     fn cpl(&mut self) {
         self.reg.a = !self.reg.a;
 
@@ -459,37 +485,43 @@ impl CPU {
         self.reg.set_flag(HALF_CARRY, true);
     }
 
-    // Complement carry flag
-    //
-    // ZERO       - Not affected
-    // SUBTRACT   - Reset
-    // HALF_CARRY - Reset
-    // CARRY      - Complemented
+    /// Complement carry flag.\
+    ///
+    /// | Flag       | Effect       |
+    /// | ---------- | ------------ |
+    /// | ZERO       | Not affected |
+    /// | SUBTRACT   | Reset        |
+    /// | HALF_CARRY | Reset        |
+    /// | CARRY      | Complemented |
     fn ccf(&mut self) {
         self.reg.set_flag(SUBTRACT, false);
         self.reg.set_flag(HALF_CARRY, false);
         self.reg.set_flag(CARRY, !self.reg.get_flag(CARRY));
     }
 
-    // Set carry flag
-    //
-    // ZERO       - Not affected
-    // SUBTRACT   - Reset
-    // HALF_CARRY - Reset
-    // CARRY      - Set
+    /// Set carry flag.\
+    ///
+    /// | Flag       | Effect       |
+    /// | ---------- | ------------ |
+    /// | ZERO       | Not affected |
+    /// | SUBTRACT   | Reset        |
+    /// | HALF_CARRY | Reset        |
+    /// | CARRY      | Set          |
     fn scf(&mut self) {
         self.reg.set_flag(SUBTRACT, false);
         self.reg.set_flag(HALF_CARRY, false);
         self.reg.set_flag(CARRY, true);
     }
 
-    // Rotate n left
-    // n = A,B,C,D,E,H,L,(HL)
-    //
-    // ZERO       - Set if result is zero
-    // SUBTRACT   - Reset
-    // HALF_CARRY - Reset
-    // CARRY      - Set to bit 7 of A
+    /// Rotate `n` left.\
+    /// `n` = `A`, `B`, `C`, `D`, `E`, `H`, `L`, `(HL)`
+    ///
+    /// | Flag       | Effect                        |
+    /// | ---------- | ----------------------------- |
+    /// | ZERO       | Set if result is zero         |
+    /// | SUBTRACT   | Reset                         |
+    /// | HALF_CARRY | Reset                         |
+    /// | CARRY      | Set to bit 7 of `A`           |
     fn rlc(&mut self, n: u8) -> u8 {
         let result = n.rotate_left(1);
 
@@ -501,13 +533,15 @@ impl CPU {
         result
     }
 
-    // Rotate n left through carry
-    // n = A,B,C,D,E,H,L,(HL)
-    //
-    // ZERO       - Set if result is zero
-    // SUBTRACT   - Reset
-    // HALF_CARRY - Reset
-    // CARRY      - Set to bit 7 of A
+    /// Rotate `n` left through carry.\
+    /// `n` = `A`, `B`, `C`, `D`, `E`, `H`, `L`, `(HL)`
+    ///
+    /// | Flag       | Effect                        |
+    /// | ---------- | ----------------------------- |
+    /// | ZERO       | Set if result is zero         |
+    /// | SUBTRACT   | Reset                         |
+    /// | HALF_CARRY | Reset                         |
+    /// | CARRY      | Set to bit 7 of `A`           |
     fn rl(&mut self, n: u8) -> u8 {
         let carry = self.reg.get_flag(CARRY) as u8;
         let result = (n << 1) | carry;
@@ -520,13 +554,15 @@ impl CPU {
         result
     }
 
-    // Rotate n right
-    // n = A,B,C,D,E,H,L,(HL)
-    //
-    // ZERO       - Set if result is zero
-    // SUBTRACT   - Reset
-    // HALF_CARRY - Reset
-    // CARRY      - Set to bit 0 of A
+    /// Rotate `n` right.\
+    /// `n` = `A`, `B`, `C`, `D`, `E`, `H`, `L`, `(HL)`
+    ///
+    /// | Flag       | Effect                        |
+    /// | ---------- | ----------------------------- |
+    /// | ZERO       | Set if result is zero         |
+    /// | SUBTRACT   | Reset                         |
+    /// | HALF_CARRY | Reset                         |
+    /// | CARRY      | Set to bit 0 of `A`           |
     fn rrc(&mut self, n: u8) -> u8 {
         let result = n.rotate_right(1);
 
@@ -538,13 +574,15 @@ impl CPU {
         result
     }
 
-    // Rotate n right through carry
-    // n = A,B,C,D,E,H,L,(HL)
-    //
-    // ZERO       - Set if result is zero
-    // SUBTRACT   - Reset
-    // HALF_CARRY - Reset
-    // CARRY      - Set to bit 0 of A
+    /// Rotate `n` right through carry.\
+    /// `n` = `A`, `B`, `C`, `D`, `E`, `H`, `L`, `(HL)`
+    ///
+    /// | Flag       | Effect                        |
+    /// | ---------- | ----------------------------- |
+    /// | ZERO       | Set if result is zero         |
+    /// | SUBTRACT   | Reset                         |
+    /// | HALF_CARRY | Reset                         |
+    /// | CARRY      | Set to bit 0 of `A`           |
     fn rr(&mut self, n: u8) -> u8 {
         let carry = self.reg.get_flag(CARRY) as u8;
         let result = (n >> 1) | (carry << 7);
@@ -557,13 +595,15 @@ impl CPU {
         result
     }
 
-    // Shift n left into carry
-    // n = A,B,C,D,E,H,L,(HL)
-    //
-    // ZERO       - Set if result is zero
-    // SUBTRACT   - Reset
-    // HALF_CARRY - Reset
-    // CARRY      - Set to bit 7 of A
+    /// Shift `n` left into carry.\
+    /// `n` = `A`, `B`, `C`, `D`, `E`, `H`, `L`, `(HL)`
+    ///
+    /// | Flag       | Effect                        |
+    /// | ---------- | ----------------------------- |
+    /// | ZERO       | Set if result is zero         |
+    /// | SUBTRACT   | Reset                         |
+    /// | HALF_CARRY | Reset                         |
+    /// | CARRY      | Set to bit 7 of `A`           |
     fn sla(&mut self, n: u8) -> u8 {
         let result = n << 1;
 
@@ -575,13 +615,15 @@ impl CPU {
         result
     }
 
-    // Shift n right into carry
-    // n = A,B,C,D,E,H,L,(HL)
-    //
-    // ZERO       - Set if result is zero
-    // SUBTRACT   - Reset
-    // HALF_CARRY - Reset
-    // CARRY      - Set to bit 0 of A
+    /// Shift `n` right into carry.\
+    /// `n` = `A`, `B`, `C`, `D`, `E`, `H`, `L`, `(HL)`
+    ///
+    /// | Flag       | Effect                        |
+    /// | ---------- | ----------------------------- |
+    /// | ZERO       | Set if result is zero         |
+    /// | SUBTRACT   | Reset                         |
+    /// | HALF_CARRY | Reset                         |
+    /// | CARRY      | Set to bit 0 of `A`           |
     fn sra(&mut self, n: u8) -> u8 {
         let result = (n >> 1) | (n & 0x80);
 
@@ -593,13 +635,15 @@ impl CPU {
         result
     }
 
-    // Shift n right into carry. Most significant byte set to 0
-    // n = A,B,C,D,E,H,L,(HL)
-    //
-    // ZERO       - Set if result is zero
-    // SUBTRACT   - Reset
-    // HALF_CARRY - Reset
-    // CARRY      - Set to bit 0 of A
+    /// Shift `n` right into carry with MSB set to `0`.\
+    /// `n` = `A`, `B`, `C`, `D`, `E`, `H`, `L`, `(HL)`
+    ///
+    /// | Flag       | Effect                        |
+    /// | ---------- | ----------------------------- |
+    /// | ZERO       | Set if result is zero         |
+    /// | SUBTRACT   | Reset                         |
+    /// | HALF_CARRY | Reset                         |
+    /// | CARRY      | Set to bit 0 of `A`           |
     fn srl(&mut self, n: u8) -> u8 {
         let result = n >> 1;
 
@@ -611,43 +655,49 @@ impl CPU {
         result
     }
 
-    // Test bit b in register n
-    // b = 0-7, n = A,B,C,D,E,H,L,(HL)
-    //
-    // ZERO       - Set if bit b of register n is 0
-    // SUBTRACT   - Reset
-    // HALF_CARRY - Set
-    // CARRY      - Not affected
+    /// Test bit `b` in register `n`.\
+    /// `b` = 0–7, `n` = `A`, `B`, `C`, `D`, `E`, `H`, `L`, `(HL)`
+    ///
+    /// | Flag       | Effect                                 |
+    /// | ---------- | -------------------------------------- |
+    /// | ZERO       | Set if bit `b` of register `n` is `0`  |
+    /// | SUBTRACT   | Reset                                   |
+    /// | HALF_CARRY | Set                                     |
+    /// | CARRY      | Not affected                            |
     fn bit(&mut self, b: u8, n: u8) {
         self.reg.set_flag(ZERO, n & (1 << b) == 0);
         self.reg.set_flag(SUBTRACT, false);
         self.reg.set_flag(HALF_CARRY, true);
     }
 
-    // Reset bit b in register n
-    // b = 0-7, n = A,B,C,D,E,H,L,(HL)
-    //
-    // ZERO       - Not affected
-    // SUBTRACT   - Reset
-    // HALF_CARRY - Not affected
-    // CARRY      - Not affected
+    /// Reset bit `b` in register `n`.\
+    /// `b` = 0–7, `n` = `A`, `B`, `C`, `D`, `E`, `H`, `L`, `(HL)`
+    ///
+    /// | Flag       | Effect       |
+    /// | ---------- | ------------ |
+    /// | ZERO       | Not affected |
+    /// | SUBTRACT   | Reset        |
+    /// | HALF_CARRY | Not affected |
+    /// | CARRY      | Not affected |
     fn res(&mut self, b: u8, n: u8) -> u8 {
         n & !(1 << b)
     }
 
-    // Set bit b in register n
-    // b = 0-7, n = A,B,C,D,E,H,L,(HL)
-    //
-    // ZERO       - Not affected
-    // SUBTRACT   - Reset
-    // HALF_CARRY - Not affected
-    // CARRY      - Not affected
+    /// Set bit `b` in register `n`.\
+    /// `b` = 0–7, `n` = `A`, `B`, `C`, `D`, `E`, `H`, `L`, `(HL)`
+    ///
+    /// | Flag       | Effect       |
+    /// | ---------- | ------------ |
+    /// | ZERO       | Not affected |
+    /// | SUBTRACT   | Reset        |
+    /// | HALF_CARRY | Not affected |
+    /// | CARRY      | Not affected |
     fn set(&mut self, b: u8, n: u8) -> u8 {
         n | (1 << b)
     }
 
-    // Add n to current address and jump to it
-    // n = signed imm8
+    /// Add `n` to the current address and jump to it.\
+    /// `n` = signed `imm8`
     fn jr(&mut self, n: u8) {
         let n = n as i8;
         if n >= 0 {
@@ -781,22 +831,58 @@ impl CPU {
             } // LD (imm16),SP
 
             // INC r16 — 8 cycles: opcode fetch + 1 internal (16-bit increment).
-            0x03 => { self.reg.set_bc(self.reg.get_bc().wrapping_add(1)); mmu.tick_m_cycle() } // INC BC
-            0x13 => { self.reg.set_de(self.reg.get_de().wrapping_add(1)); mmu.tick_m_cycle() } // INC DE
-            0x23 => { self.reg.set_hl(self.reg.get_hl().wrapping_add(1)); mmu.tick_m_cycle() } // INC HL
-            0x33 => { self.reg.sp = self.reg.sp.wrapping_add(1); mmu.tick_m_cycle() }          // INC SP
+            0x03 => {
+                self.reg.set_bc(self.reg.get_bc().wrapping_add(1));
+                mmu.tick_m_cycle()
+            } // INC BC
+            0x13 => {
+                self.reg.set_de(self.reg.get_de().wrapping_add(1));
+                mmu.tick_m_cycle()
+            } // INC DE
+            0x23 => {
+                self.reg.set_hl(self.reg.get_hl().wrapping_add(1));
+                mmu.tick_m_cycle()
+            } // INC HL
+            0x33 => {
+                self.reg.sp = self.reg.sp.wrapping_add(1);
+                mmu.tick_m_cycle()
+            } // INC SP
 
             // DEC r16 — 8 cycles: opcode fetch + 1 internal (16-bit decrement).
-            0x0B => { self.reg.set_bc(self.reg.get_bc().wrapping_sub(1)); mmu.tick_m_cycle() } // DEC BC
-            0x1B => { self.reg.set_de(self.reg.get_de().wrapping_sub(1)); mmu.tick_m_cycle() } // DEC DE
-            0x2B => { self.reg.set_hl(self.reg.get_hl().wrapping_sub(1)); mmu.tick_m_cycle() } // DEC HL
-            0x3B => { self.reg.sp = self.reg.sp.wrapping_sub(1); mmu.tick_m_cycle() }          // DEC SP
+            0x0B => {
+                self.reg.set_bc(self.reg.get_bc().wrapping_sub(1));
+                mmu.tick_m_cycle()
+            } // DEC BC
+            0x1B => {
+                self.reg.set_de(self.reg.get_de().wrapping_sub(1));
+                mmu.tick_m_cycle()
+            } // DEC DE
+            0x2B => {
+                self.reg.set_hl(self.reg.get_hl().wrapping_sub(1));
+                mmu.tick_m_cycle()
+            } // DEC HL
+            0x3B => {
+                self.reg.sp = self.reg.sp.wrapping_sub(1);
+                mmu.tick_m_cycle()
+            } // DEC SP
 
             // ADD HL, r16 — 8 cycles: opcode fetch + 1 internal (16-bit addition).
-            0x09 => { self.add_hl(self.reg.get_bc()); mmu.tick_m_cycle() } // ADD HL,BC
-            0x19 => { self.add_hl(self.reg.get_de()); mmu.tick_m_cycle() } // ADD HL,DE
-            0x29 => { self.add_hl(self.reg.get_hl()); mmu.tick_m_cycle() } // ADD HL,HL
-            0x39 => { self.add_hl(self.reg.sp); mmu.tick_m_cycle() }       // ADD HL,SP
+            0x09 => {
+                self.add_hl(self.reg.get_bc());
+                mmu.tick_m_cycle()
+            } // ADD HL,BC
+            0x19 => {
+                self.add_hl(self.reg.get_de());
+                mmu.tick_m_cycle()
+            } // ADD HL,DE
+            0x29 => {
+                self.add_hl(self.reg.get_hl());
+                mmu.tick_m_cycle()
+            } // ADD HL,HL
+            0x39 => {
+                self.add_hl(self.reg.sp);
+                mmu.tick_m_cycle()
+            } // ADD HL,SP
 
             // INC r8
             0x04 => self.reg.b = self.inc(self.reg.b), // INC B
@@ -1000,6 +1086,17 @@ impl CPU {
 
             // HALT
             0x76 => {
+                let _ie = mmu.read_byte(0xFFFF);
+                let _if = mmu.read_byte(0xFF0F);
+                let _pending = _ie & _if;
+                eprintln!(
+                    "HALT@{:04X} ime={} IE={:02X} IF={:02X} pending={:02X}",
+                    self.reg.pc.wrapping_sub(1),
+                    self.ime,
+                    _ie,
+                    _if,
+                    _pending
+                );
                 if !self.ime && self.pending_interrupt_mask(mmu) != 0 {
                     self.trigger_halt_bug();
                 } else {
@@ -1285,14 +1382,38 @@ impl CPU {
             } // CALL imm16
 
             // RST target — 16 cycles: fetch + internal (SP adjust) + push hi + push lo.
-            0xC7 => { mmu.tick_m_cycle(); self.rst(mmu, 0x00) } // RST 00H
-            0xCF => { mmu.tick_m_cycle(); self.rst(mmu, 0x08) } // RST 08H
-            0xD7 => { mmu.tick_m_cycle(); self.rst(mmu, 0x10) } // RST 10H
-            0xDF => { mmu.tick_m_cycle(); self.rst(mmu, 0x18) } // RST 18H
-            0xE7 => { mmu.tick_m_cycle(); self.rst(mmu, 0x20) } // RST 20H
-            0xEF => { mmu.tick_m_cycle(); self.rst(mmu, 0x28) } // RST 28H
-            0xF7 => { mmu.tick_m_cycle(); self.rst(mmu, 0x30) } // RST 30H
-            0xFF => { mmu.tick_m_cycle(); self.rst(mmu, 0x38) } // RST 38H
+            0xC7 => {
+                mmu.tick_m_cycle();
+                self.rst(mmu, 0x00)
+            } // RST 00H
+            0xCF => {
+                mmu.tick_m_cycle();
+                self.rst(mmu, 0x08)
+            } // RST 08H
+            0xD7 => {
+                mmu.tick_m_cycle();
+                self.rst(mmu, 0x10)
+            } // RST 10H
+            0xDF => {
+                mmu.tick_m_cycle();
+                self.rst(mmu, 0x18)
+            } // RST 18H
+            0xE7 => {
+                mmu.tick_m_cycle();
+                self.rst(mmu, 0x20)
+            } // RST 20H
+            0xEF => {
+                mmu.tick_m_cycle();
+                self.rst(mmu, 0x28)
+            } // RST 28H
+            0xF7 => {
+                mmu.tick_m_cycle();
+                self.rst(mmu, 0x30)
+            } // RST 30H
+            0xFF => {
+                mmu.tick_m_cycle();
+                self.rst(mmu, 0x38)
+            } // RST 38H
 
             // POP r16 — 12 cycles: fetch + pop lo + pop hi (no internal tick needed).
             0xC1 => {
@@ -1313,10 +1434,22 @@ impl CPU {
             } // POP AF
 
             // PUSH r16 — 16 cycles: fetch + internal (SP adjust) + push hi + push lo.
-            0xC5 => { mmu.tick_m_cycle(); self.push(mmu, self.reg.get_bc()) } // PUSH BC
-            0xD5 => { mmu.tick_m_cycle(); self.push(mmu, self.reg.get_de()) } // PUSH DE
-            0xE5 => { mmu.tick_m_cycle(); self.push(mmu, self.reg.get_hl()) } // PUSH HL
-            0xF5 => { mmu.tick_m_cycle(); self.push(mmu, self.reg.get_af()) } // PUSH AF
+            0xC5 => {
+                mmu.tick_m_cycle();
+                self.push(mmu, self.reg.get_bc())
+            } // PUSH BC
+            0xD5 => {
+                mmu.tick_m_cycle();
+                self.push(mmu, self.reg.get_de())
+            } // PUSH DE
+            0xE5 => {
+                mmu.tick_m_cycle();
+                self.push(mmu, self.reg.get_hl())
+            } // PUSH HL
+            0xF5 => {
+                mmu.tick_m_cycle();
+                self.push(mmu, self.reg.get_af())
+            } // PUSH AF
 
             // LDH (C), A
             0xE2 => bus_write(mmu, 0xFF00 + self.reg.c as u16, self.reg.a), // LDH (C),A
@@ -1377,7 +1510,10 @@ impl CPU {
             } // LD HL,SP+imm8
 
             // LD SP, HL — 8 cycles: opcode fetch + 1 internal (16-bit register copy).
-            0xF9 => { self.reg.sp = self.reg.get_hl(); mmu.tick_m_cycle() } // LD SP,HL
+            0xF9 => {
+                self.reg.sp = self.reg.get_hl();
+                mmu.tick_m_cycle()
+            } // LD SP,HL
 
             // DI
             0xF3 => {
@@ -2025,5 +2161,28 @@ mod tests {
         }
 
         eprintln!("serial output: '{}'", gb.serial_output());
+
+        eprintln!("RAM @A000:");
+        eprintln!("  A000 (status) = {:02X}", gb.peek_byte(0xA000));
+        eprintln!(
+            "  A001-A003 (magic) = {:02X} {:02X} {:02X}",
+            gb.peek_byte(0xA001),
+            gb.peek_byte(0xA002),
+            gb.peek_byte(0xA003)
+        );
+        eprintln!("  text @A004:");
+        let mut text = String::new();
+        for i in 0u16..300 {
+            let b = gb.peek_byte(0xA004 + i);
+            if b == 0 {
+                break;
+            }
+            text.push(if b.is_ascii_graphic() || b == b' ' || b == b'\n' {
+                b as char
+            } else {
+                '?'
+            });
+        }
+        eprintln!("  {text:?}");
     }
 }
