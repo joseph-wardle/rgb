@@ -16,9 +16,9 @@ use ringbuf::traits::{Consumer, Producer, Split};
 use ringbuf::{HeapCons, HeapProd, HeapRb};
 
 /// Capacity of the ring buffer in stereo sample pairs.
-/// ~100 ms at 44,100 Hz gives a comfortable margin between emulator frames
-/// and the audio callback without introducing noticeable latency.
-const RING_BUFFER_PAIRS: usize = 4096;
+/// ~370 ms at 44,100 Hz gives headroom to absorb the imprecision of
+/// thread::sleep frame pacing without the buffer running dry.
+const RING_BUFFER_PAIRS: usize = 16_384;
 
 /// Owns the cpal stream and the producer end of the sample ring buffer.
 ///
@@ -85,8 +85,15 @@ fn build_stream(
         .build_output_stream(
             config,
             move |output: &mut [f32], _| {
+                // On underrun, hold the last real sample rather than jumping
+                // to silence.  A "frozen" sample is inaudible at these
+                // durations; a sudden drop to 0.0 produces a loud click.
+                let mut last = 0.0f32;
                 for sample in output.iter_mut() {
-                    *sample = consumer.try_pop().unwrap_or(0.0);
+                    if let Some(s) = consumer.try_pop() {
+                        last = s;
+                    }
+                    *sample = last;
                 }
             },
             |err| eprintln!("audio stream error: {err}"),
