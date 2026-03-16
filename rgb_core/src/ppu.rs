@@ -236,16 +236,20 @@ impl PPU {
         PPU {
             vram: [0; 0x2000],
             oam: [0; 0xA0],
-            lcd_control: 0,
-            lcd_status: 0,
+            // Post-boot-ROM hardware register state (Pan Docs § "Power Up Sequence").
+            // When the emulator skips the boot ROM these must match what the boot ROM
+            // would have left behind, otherwise games that wait for VBlank in their
+            // init code hang forever (LCDC=0 disables the PPU and VBlank never fires).
+            lcd_control: 0x91, // LCD on, BG tile data = 0x8000, BG tile map = 0x9800, BG enabled
+            lcd_status: 0x85,  // LYC=LY flag + mode 1 (VBlank) — matches real HW at PC=0x0100
             scroll_y: 0,
             scroll_x: 0,
             ly: 0,
             lyc: 0,
-            dma: 0,
-            bg_palette: 0,
-            obj_palette0: 0,
-            obj_palette1: 0,
+            dma: 0xFF,
+            bg_palette: 0xFC,   // DMG classic: shade 0 → white, shades 1–3 → black
+            obj_palette0: 0xFF, // all shades → black (sprites use this by default)
+            obj_palette1: 0xFF,
             window_y: 0,
             window_x: 0,
             window_line: 0,
