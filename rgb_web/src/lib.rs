@@ -53,6 +53,9 @@ pub fn start(rom: &[u8]) {
         audio: audio_sink,
         title: window_title,
         scale: 4,
+        // Attach to the pre-placed <canvas id="rgb-canvas"> in the page so
+        // the emulator renders inside the embed rather than at document.body.
+        canvas_id: Some("rgb-canvas".to_string()),
     };
 
     let mut app = App::new(config);

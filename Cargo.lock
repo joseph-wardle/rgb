@@ -1809,7 +1809,9 @@ dependencies = [
  "js-sys",
  "pixels",
  "rgb_core",
+ "wasm-bindgen",
  "wasm-bindgen-futures",
+ "web-sys",
  "winit",
 ]
 

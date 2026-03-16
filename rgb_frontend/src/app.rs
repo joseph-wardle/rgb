@@ -57,6 +57,12 @@ pub struct App {
     #[cfg(target_arch = "wasm32")]
     pixels_pending: std::rc::Rc<std::cell::RefCell<Option<Pixels<'static>>>>,
 
+    /// On WASM: DOM id of a pre-existing `<canvas>` to attach to.  When
+    /// `Some`, winit uses that element as the window surface; when `None` it
+    /// appends a new canvas to `document.body`.
+    #[cfg(target_arch = "wasm32")]
+    canvas_id: Option<String>,
+
     /// Frame-rate limiter.
     pacer: FramePacer,
     /// Save data captured on exit for the caller.
@@ -89,6 +95,8 @@ impl App {
             pixels: None,
             #[cfg(target_arch = "wasm32")]
             pixels_pending: std::rc::Rc::new(std::cell::RefCell::new(None)),
+            #[cfg(target_arch = "wasm32")]
+            canvas_id: config.canvas_id,
             pacer: FramePacer::new(),
             result: None,
         }
@@ -129,13 +137,27 @@ impl ApplicationHandler for App {
                 SCREEN_HEIGHT as u32,
             ));
 
-        // On WASM, winit creates a <canvas> but does NOT insert it into the
-        // DOM by default.  with_append(true) tells winit to append it to
-        // document.body so it becomes visible.
+        // On WASM, attach winit to a pre-existing <canvas> by id if one was
+        // provided; otherwise append a new canvas to document.body.
+        // Using a pre-placed canvas lets the embedding page (e.g. a portfolio
+        // article) control exactly where the emulator screen appears.
         #[cfg(target_arch = "wasm32")]
         {
+            use wasm_bindgen::JsCast;
             use winit::platform::web::WindowAttributesExtWebSys;
-            attrs = attrs.with_append(true);
+
+            let canvas = self.canvas_id.as_deref().and_then(|id| {
+                web_sys::window()
+                    .and_then(|w| w.document())
+                    .and_then(|d| d.get_element_by_id(id))
+                    .and_then(|e| e.dyn_into::<web_sys::HtmlCanvasElement>().ok())
+            });
+
+            if canvas.is_some() {
+                attrs = attrs.with_canvas(canvas);
+            } else {
+                attrs = attrs.with_append(true);
+            }
         }
 
         let window = Arc::new(

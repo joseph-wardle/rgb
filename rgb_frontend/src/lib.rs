@@ -38,6 +38,12 @@ pub struct EmulatorConfig {
     pub title: String,
     /// Integer scale factor for the initial window size (e.g. 4 → 640×576).
     pub scale: u32,
+    /// On WASM: if provided, winit attaches to the existing `<canvas>` with
+    /// this DOM id rather than creating a new element and appending it to
+    /// `document.body`.  Use this to place the emulator canvas at a specific
+    /// location on the page (e.g. inside a portfolio article embed).
+    #[cfg(target_arch = "wasm32")]
+    pub canvas_id: Option<String>,
 }
 
 /// Returned by [`run`] after the window is closed so the caller can persist
