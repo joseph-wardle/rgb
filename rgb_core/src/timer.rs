@@ -38,13 +38,19 @@
 //! fires.  If TMA is updated during cycle A the pending reload picks up the
 //! new value.
 //!
-//! ## DIV-write falling edges
+//! ## Falling edges from register writes
 //!
-//! Resetting the system counter (writing to 0xFF04) can create a falling edge
-//! on the TIMA bit tap if that bit was 1 at the moment of the write.  This
-//! gives TIMA an extra increment exactly as if the counter had counted through
-//! naturally.  The APU frame sequencer (bit 12) is subject to the same effect;
-//! see [`reset_divider`].
+//! Both DIV writes and TAC writes can create a falling edge on the mux signal
+//! that clocks TIMA — `timer_enabled AND (system_counter & selected_bit != 0)`:
+//!
+//! - **DIV write** — resets the system counter to zero, so any previously-set
+//!   tap bit drops to 0 while the enable may still be 1.  See [`reset_divider`].
+//! - **TAC write** — changes the enable flag or the selected bit, so the mux
+//!   output can fall from 1 to 0 even though the counter has not moved.
+//!   See [`write_tac`].
+//!
+//! The APU frame sequencer (bit 12) is subject to the same DIV-write effect;
+//! see [`crate::apu::APU::notify_div_reset`].
 
 /// IF bit for the timer interrupt.
 const TIMER_INTERRUPT_BIT: u8 = 1 << 2;
@@ -148,6 +154,36 @@ impl Timer {
         }
 
         old
+    }
+
+    /// Write to TAC (0xFF07).
+    ///
+    /// The signal that clocks TIMA is not the raw counter bit but the output
+    /// of a **mux**: `timer_enabled AND (system_counter & selected_bit != 0)`.
+    /// Writing TAC changes the mux inputs (the enable flag and/or the selected
+    /// bit), which can create a falling edge on that combined signal even
+    /// though the system counter itself has not moved.
+    ///
+    /// Examples:
+    ///  - Disabling the timer (TAC bit 2: 1→0) while the selected bit is 1
+    ///    drives the mux output from 1 to 0 — a falling edge.
+    ///  - Switching clock-select (bits 0–1) from a bit that was 1 to a bit
+    ///    that is 0 (with the timer enabled) does the same.
+    ///
+    /// This mirrors the DIV-write edge case handled by [`reset_divider`].
+    pub(crate) fn write_tac(&mut self, value: u8) {
+        // Snapshot the mux output with the old TAC before updating.
+        let old_mux = self.timer_enabled() && self.system_counter & self.tima_bit() != 0;
+
+        self.tac = value;
+
+        // Recompute the mux output with the new TAC (new enable + new bit tap).
+        let new_mux = self.timer_enabled() && self.system_counter & self.tima_bit() != 0;
+
+        // A 1→0 transition on the mux output is a falling edge: increment TIMA.
+        if old_mux && !new_mux {
+            self.advance_tima();
+        }
     }
 
     // -----------------------------------------------------------------------
