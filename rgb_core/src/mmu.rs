@@ -55,6 +55,22 @@ pub(crate) struct MMU {
     wram: [u8; 0x2000],          // Work RAM: 8 KiB, two fixed 4 KiB banks (DMG has no banking)
     boot_rom: Option<Box<[u8]>>, // 256-byte boot ROM image; None = skip boot ROM
     boot_rom_mapped: bool,       // true until the game writes 0xFF50 to unmap it
+
+    // OAM DMA state machine.
+    //
+    // Writing to 0xFF46 initiates a transfer: the hardware copies 160 bytes
+    // from (source × 0x100) into OAM, one byte per M-cycle, preceded by a
+    // 1-cycle startup delay.  On real hardware the CPU bus is restricted to
+    // HRAM during the transfer; games run their DMA handler ("trampoline")
+    // from HRAM to work around this.  We model the cycle-accurate DMA copy
+    // but do not currently enforce the CPU bus lockout.
+    //
+    // oam_dma_remaining counts the cycles left in the current transfer:
+    //   161      = just started, startup delay (no bytes copied yet)
+    //   160..=1  = transferring byte (160 − remaining)
+    //   0        = idle, no transfer in progress
+    oam_dma_remaining: u8,
+    oam_dma_source: u16, // base address latched from the value written to 0xFF46
 }
 
 #[expect(clippy::upper_case_acronyms)]
@@ -76,6 +92,8 @@ impl MMU {
             wram: [0x00; 0x2000],
             boot_rom_mapped: boot_rom.is_some(),
             boot_rom,
+            oam_dma_remaining: 0,
+            oam_dma_source: 0,
         }
     }
 
@@ -156,18 +174,13 @@ impl MMU {
                 }
             }
             0xFF46 => {
-                // OAM DMA: copy 160 bytes from (value × 0x100) into OAM.
-                // On hardware this locks the CPU bus for 160 µs; here we model
-                // it as an instantaneous copy, which is sufficient for games
-                // that wait for the transfer to complete before accessing OAM.
-                // The DMA uses the PPU's internal bus, bypassing the mode-based
-                // access restriction that applies to the CPU bus.
-                let source = (value as u16) << 8;
-                for i in 0..0xA0u16 {
-                    let byte = self.read_byte(source + i);
-                    self.devices.ppu.write_oam_direct(i as usize, byte);
-                }
-                self.devices.ppu.write_byte(0xFF46, value); // record for reads
+                // Writing to 0xFF46 starts an OAM DMA transfer (see the
+                // oam_dma_remaining field and tick_m_cycle for the transfer
+                // state machine).  The DMA register value is stored in the PPU
+                // so it can be read back via 0xFF46.
+                self.devices.ppu.write_byte(0xFF46, value);
+                self.oam_dma_source = (value as u16) << 8;
+                self.oam_dma_remaining = 161; // 1 startup cycle + 160 transfer cycles
             }
             0xFF40 | 0xFF42..=0xFF45 | 0xFF47..=0xFF4B => self.devices.ppu.write_byte(address, value),
             0xFF50 => {
@@ -182,10 +195,14 @@ impl MMU {
     }
 }
 
-impl Memory for MMU {
-    fn read_byte(&self, address: u16) -> u8 {
-        // When the boot ROM is mapped it shadows cartridge addresses 0x0000–0x00FF.
-        // The boot ROM unmaps itself by writing to 0xFF50.
+impl MMU {
+    /// Route a read to the appropriate device or memory region.
+    ///
+    /// Used directly by the OAM DMA hardware (which has its own bus) and by
+    /// `Memory::read_byte`.  On real hardware the CPU path would enforce a
+    /// bus restriction during DMA; that lockout is not yet implemented here.
+    fn read_byte_dispatch(&self, address: u16) -> u8 {
+        // The boot ROM shadows cartridge addresses 0x0000–0x00FF while mapped.
         if self.boot_rom_mapped
             && let Some(ref rom) = self.boot_rom
             && (address as usize) < rom.len()
@@ -201,6 +218,12 @@ impl Memory for MMU {
             MemoryRegion::IO => self.read_io(address),
             MemoryRegion::Unused => 0,
         }
+    }
+}
+
+impl Memory for MMU {
+    fn read_byte(&self, address: u16) -> u8 {
+        self.read_byte_dispatch(address)
     }
 
     fn write_byte(&mut self, address: u16, value: u8) {
@@ -229,6 +252,24 @@ impl MemoryBus for MMU {
         self.devices.timer.step(4, &mut self.interrupts.flag);
         self.devices.ppu.step(4, &mut self.interrupts.flag);
         self.devices.apu.step(4, counter_before);
+
+        // Advance an active OAM DMA transfer by one M-cycle.
+        //
+        // The first cycle (161 → 160) is a startup delay — the DMG hardware
+        // needs one cycle to set up the transfer before bytes begin flowing.
+        // Each subsequent cycle (160 → 1) copies one byte from the source
+        // address into OAM.  The DMA reads via read_byte_dispatch, which uses
+        // the DMA's own bus and is not subject to the CPU bus restriction.
+        if self.oam_dma_remaining > 0 {
+            self.oam_dma_remaining -= 1;
+            if self.oam_dma_remaining < 160 {
+                let byte_index = (159 - self.oam_dma_remaining) as usize;
+                let src = self.oam_dma_source + byte_index as u16;
+                let byte = self.read_byte_dispatch(src);
+                self.devices.ppu.write_oam_direct(byte_index, byte);
+            }
+        }
+
         self.log_step(
             4,
             self.devices.timer.div(),
