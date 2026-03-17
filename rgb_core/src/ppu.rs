@@ -4,17 +4,20 @@
 //! grid across 154 lines (144 visible + 10 VBlank), cycling through four
 //! modes per visible scanline:
 //!
-//!   Mode 2 (OAM Scan) →  80 dots — locate sprites for this scanline
-//!   Mode 3 (Drawing)  → 172 dots — pixel pipeline pushes pixels to the LCD
-//!   Mode 0 (HBlank)   → 204 dots — horizontal blank between scanlines
+//!   Mode 2 (OAM Scan) →   80 dots  — locate sprites for this scanline
+//!   Mode 3 (Drawing)  → 172+ dots  — pixel pipeline pushes pixels to the LCD;
+//!                                     duration grows with SCX, sprites, window
+//!   Mode 0 (HBlank)   → 204− dots  — horizontal blank absorbs Mode 3 overflow
 //!
-//! During VBlank (scanlines 144–153) the PPU remains in Mode 1 for the
-//! entire scanline. One full frame is 70,224 dots (~59.7 fps).
+//! Every visible scanline is exactly 456 dots: 80 + mode3_length + hblank = 456.
+//! During VBlank (scanlines 144–153) the PPU stays in Mode 1 for all 456 dots.
+//! One full frame is 70,224 dots (~59.7 fps).
 //!
 //! # What is implemented
 //!
-//! **Timing state machine** (Phase 2): LY counter, dot counter, mode
-//! transitions, VBlank and STAT interrupt generation.
+//! **Timing state machine** (Phase 2): LY counter, dot counter, variable Mode 3
+//! length from SCX fine-scroll / sprite / window penalties, mode transitions,
+//! VBlank and STAT interrupt generation.
 //!
 //! **Background rendering** (Phase 3): tile data fetch, tile map lookup,
 //! SCX/SCY viewport scroll, BGP palette application. Each scanline is
@@ -31,10 +34,6 @@
 //! silently dropped when accessing VRAM during Mode 3, or OAM during
 //! Mode 2 or Mode 3 — matching DMG hardware. OAM DMA bypasses this
 //! via [`PPU::write_oam_direct`].
-//!
-//! # What is not yet implemented
-//!
-//! - Mode 3 variable-length timing from SCX/sprite/window penalties
 
 use std::cell::Cell;
 
@@ -65,11 +64,11 @@ const TOTAL_SCANLINES: u8 = 154;
 /// visible scanline to build the list of sprites that appear on this line.
 const OAM_SCAN_DOTS: u16 = 80;
 
-/// Mode 3 (Drawing): the pixel pipeline runs for at least 172 dots.
-/// The actual length grows with SCX fine-scroll, sprite hits, and window
-/// activation (not yet modeled; see Phase 5). Mode 0 (HBlank) fills the
-/// remainder: 456 − 80 − 172 = 204 dots minimum.
-const DRAWING_DOTS: u16 = 172;
+/// Mode 3 (Drawing): the pixel pipeline runs for *at least* 172 dots.
+/// The actual duration is longer on scanlines with SCX fine-scroll, sprites,
+/// or window activation — see [`PPU::compute_mode3_length`].
+/// Mode 0 (HBlank) absorbs the difference: 456 − 80 − mode3_length.
+const DRAWING_DOTS_BASE: u16 = 172;
 
 // ---------------------------------------------------------------------------
 // Register bit masks — named for their register and function
@@ -202,8 +201,9 @@ pub(crate) struct PPU {
     window_line: u8,
 
     // Timing state machine
-    dot: u16,   // T-cycle position within the current scanline (0–455)
-    mode: Mode, // current PPU mode; kept in sync with lcd_status bits 0–1
+    dot: u16,          // T-cycle position within the current scanline (0–455)
+    mode: Mode,        // current PPU mode; kept in sync with lcd_status bits 0–1
+    mode3_length: u16, // cached Mode 3 dot-count for this scanline (172 + penalties)
 
     // The STAT interrupt fires on the rising edge of a combined signal that is
     // the logical OR of all currently active and enabled STAT sources. This
@@ -255,6 +255,7 @@ impl PPU {
             window_line: 0,
             dot: 0,
             mode: Mode::OamScan, // (ly=0, dot=0) → Mode 2 per timing table
+            mode3_length: DRAWING_DOTS_BASE, // recomputed at every OAM→Drawing transition
             stat_line: false,
             framebuffer: [0; SCREEN_WIDTH * SCREEN_HEIGHT],
             oam_cpu_read_pending: Cell::new(false),
@@ -348,6 +349,7 @@ impl PPU {
             self.corrupt_oam(OamCorruptionKind::Read);
         }
 
+        let prev_dot = self.dot;
         self.dot += cycles;
 
         // Each scanline is 456 dots. The longest SM83 instruction is 24
@@ -360,15 +362,28 @@ impl PPU {
             }
         }
 
+        // At the OAM Scan → Drawing transition, compute and cache the variable
+        // Mode 3 length for this scanline. All sprites are now known (the
+        // 80-dot OAM scan has just completed), so penalties can be determined.
+        //
+        // The check is safe without the scanline-wrap guard: a wrap cannot
+        // carry dot past OAM_SCAN_DOTS in a single step (max instruction = 24
+        // T-cycles; OAM_SCAN_DOTS = 80), so this branch fires at most once
+        // per visible scanline, on the step that crosses dot 80.
+        if self.ly < VISIBLE_SCANLINES
+            && prev_dot < OAM_SCAN_DOTS
+            && self.dot >= OAM_SCAN_DOTS
+        {
+            let sprites = self.scan_oam_for_scanline();
+            self.mode3_length = self.compute_mode3_length(&sprites);
+        }
+
         let prev_mode = self.mode;
         self.update_stat_and_interrupts(interrupt_flag);
 
-        // Render the scanline when Mode 3 ends. On hardware, the pixel pipeline
+        // Render the scanline when Mode 3 ends. On hardware the pixel pipeline
         // pushes pixels one-by-one throughout Mode 3; here we produce the whole
-        // scanline at once at the Drawing→HBlank boundary. This is accurate for
-        // games that do not scroll mid-scanline or rely on mid-scanline raster
-        // effects (variable Mode 3 length from SCX/sprite/window penalties is
-        // not yet modelled).
+        // scanline at once at the Drawing→HBlank boundary.
         if prev_mode == Mode::Drawing && self.mode == Mode::HBlank {
             self.render_scanline();
         }
@@ -382,6 +397,72 @@ impl PPU {
         (self.lcd_control & LCDC_LCD_ENABLE) != 0
     }
 
+    // -----------------------------------------------------------------------
+    // Variable Mode 3 length (Phase 2 timing accuracy)
+    // -----------------------------------------------------------------------
+
+    /// Compute the total Mode 3 (Drawing) dot count for this scanline.
+    ///
+    /// Mode 3 starts at dot 80 and runs for `DRAWING_DOTS_BASE` plus three
+    /// hardware-imposed penalties that stall the pixel pipeline:
+    ///
+    ///   1. **SCX fine-scroll** — the pipeline discards the leftmost (SCX % 8)
+    ///      pixels from the first background tile before pushing any pixels out.
+    ///   2. **Sprite fetch** — each sprite on the scanline causes the pipeline
+    ///      to pause while it fetches the sprite's tile row from VRAM.
+    ///   3. **Window activation** — when the window first becomes visible on a
+    ///      scanline, the pipeline abandons its current BG tile and restarts
+    ///      the fetcher for the window tile map.
+    ///
+    /// Mode 0 (HBlank) absorbs the remainder: 456 − 80 − mode3_length.
+    ///
+    /// Called once per visible scanline at the OAM Scan → Drawing transition,
+    /// when all sprites for the line are known.
+    fn compute_mode3_length(&self, sprites: &[Sprite]) -> u16 {
+        DRAWING_DOTS_BASE
+            + self.scx_fine_scroll_penalty()
+            + self.sprite_fetch_penalty(sprites)
+            + self.window_activate_penalty()
+    }
+
+    /// SCX fine-scroll penalty: 0–7 dots.
+    ///
+    /// The background fetcher always reads an aligned 8-pixel chunk first.
+    /// When SCX is not a multiple of 8 the pipeline discards the (SCX % 8)
+    /// leftmost pixels of that first chunk before outputting pixel 0, stalling
+    /// for one dot per discarded pixel.
+    fn scx_fine_scroll_penalty(&self) -> u16 {
+        (self.scroll_x % 8) as u16
+    }
+
+    /// Sprite fetch penalty: 6 dots per sprite on the scanline.
+    ///
+    /// Each time the pixel pipeline's X position reaches a sprite's left edge,
+    /// it pauses to fetch that sprite's tile row from VRAM. The actual stall
+    /// is 6–11 dots depending on alignment; 6 is the minimum and a reasonable
+    /// approximation for the per-sprite cost.
+    fn sprite_fetch_penalty(&self, sprites: &[Sprite]) -> u16 {
+        sprites.len() as u16 * 6
+    }
+
+    /// Window activation penalty: 6 dots when the window is visible this line.
+    ///
+    /// When the pixel pipeline's X position first reaches the window's left
+    /// edge on a scanline where the window is visible, the pipeline discards
+    /// its current BG tile and restarts the fetcher for the window tile map.
+    /// This costs 6 dots (one full fetch cycle).
+    fn window_activate_penalty(&self) -> u16 {
+        let window_enabled = (self.lcd_control & LCDC_WINDOW_ENABLE) != 0;
+        let scanline_in_range = self.ly >= self.window_y;
+        let window_on_screen = (self.window_x as usize).saturating_sub(7) < SCREEN_WIDTH;
+
+        if window_enabled && scanline_in_range && window_on_screen {
+            6
+        } else {
+            0
+        }
+    }
+
     /// Derive the PPU mode from the current scanline and dot position.
     ///
     /// This is the ground truth for mode; `self.mode` is kept in sync with
@@ -391,7 +472,7 @@ impl PPU {
             Mode::VBlank
         } else if self.dot < OAM_SCAN_DOTS {
             Mode::OamScan
-        } else if self.dot < OAM_SCAN_DOTS + DRAWING_DOTS {
+        } else if self.dot < OAM_SCAN_DOTS + self.mode3_length {
             Mode::Drawing
         } else {
             Mode::HBlank

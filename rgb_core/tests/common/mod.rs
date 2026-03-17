@@ -71,15 +71,16 @@ const BLARGG: Suite = Suite {
 /// Wilbert Pol and others.  Uses the Fibonacci register protocol (see module
 /// docs).
 ///
+/// Pre-built ROMs are hosted at <https://gekkio.fi/files/mooneye-test-suite/>.
 /// Source: <https://github.com/Gekkio/mooneye-test-suite>
 ///
-/// Update `MOONEYE_ARCHIVE_ROOT` if upgrading to a different release.
+/// Update `archive_url` and `archive_root` together if upgrading to a newer build.
 const MOONEYE: Suite = Suite {
     name: "mooneye",
     env_var: "RGB_MOONEYE_ROM_DIR",
     default_dir: "mooneye-test-roms",
-    archive_url: "https://github.com/Gekkio/mooneye-test-suite/releases/download/2021-11-22/mooneye-test-suite-2021-11-22-git.zip",
-    archive_root: "mooneye-test-suite-2021-11-22-git",
+    archive_url: "https://gekkio.fi/files/mooneye-test-suite/mts-20240926-1737-443f6e1/mts-20240926-1737-443f6e1.zip",
+    archive_root: "mts-20240926-1737-443f6e1",
     ready_marker: ".rgb_mooneye_ready",
 };
 
