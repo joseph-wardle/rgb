@@ -1086,17 +1086,6 @@ impl CPU {
 
             // HALT
             0x76 => {
-                let _ie = mmu.read_byte(0xFFFF);
-                let _if = mmu.read_byte(0xFF0F);
-                let _pending = _ie & _if;
-                eprintln!(
-                    "HALT@{:04X} ime={} IE={:02X} IF={:02X} pending={:02X}",
-                    self.reg.pc.wrapping_sub(1),
-                    self.ime,
-                    _ie,
-                    _if,
-                    _pending
-                );
                 if !self.ime && self.pending_interrupt_mask(mmu) != 0 {
                     self.trigger_halt_bug();
                 } else {

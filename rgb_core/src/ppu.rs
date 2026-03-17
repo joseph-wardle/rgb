@@ -334,8 +334,10 @@ impl PPU {
             self.oam_cpu_read_pending.take(); // clear any stale flag while LCD is off
             self.ly = 0;
             self.dot = 0;
+            self.window_line = 0; // reset so re-enable starts the window from row 0
             self.mode = Mode::HBlank;
             self.lcd_status &= !STAT_MODE_MASK; // mode bits → 0 (HBlank)
+            self.stat_line = false; // reset so re-enable can fire a rising-edge interrupt
             return;
         }
 
