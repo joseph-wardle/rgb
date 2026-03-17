@@ -124,6 +124,7 @@ pub(crate) struct APU {
 
     /// NR50 — master volume.
     /// Bits 6–4 = left volume (0–7), bits 2–0 = right volume (0–7).
+    /// Hardware adds 1 before scaling: effective amplitude = (field + 1) / 8.
     /// Bit 7 / bit 3 route the cartridge's analogue VIN pin; not emulated.
     pub nr50: u8,
 
@@ -288,9 +289,12 @@ impl APU {
         let ch3 = self.ch3_dac_output();
         let ch4 = self.ch4_dac_output();
 
-        // NR50: master volume (0–7) for left (bits 6–4) and right (bits 2–0).
-        let left_vol = ((self.nr50 >> 4) & 0x07) as f32 / 7.0;
-        let right_vol = (self.nr50 & 0x07) as f32 / 7.0;
+        // NR50: master volume for left (bits 6–4) and right (bits 2–0).
+        // Pan Docs: "0 equals volume of 1 and 7 equals no reduction."
+        // The hardware adds 1 before scaling, so 0 → 1/8 (quiet) and 7 → 8/8 (full).
+        // Dividing by 7 instead would make volume 0 silent, which is incorrect.
+        let left_vol = (((self.nr50 >> 4) & 0x07) + 1) as f32 / 8.0;
+        let right_vol = ((self.nr50 & 0x07) + 1) as f32 / 8.0;
 
         // NR51: which channels are panned to each output.
         // Bit 7/6/5/4 = Ch4/3/2/1 to left; bit 3/2/1/0 = Ch4/3/2/1 to right.
