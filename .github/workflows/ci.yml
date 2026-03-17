@@ -36,7 +36,14 @@ jobs:
           path: target/blargg-test-roms
           key: blargg-roms-v1
 
+      - name: Restore Mooneye ROM cache
+        uses: actions/cache@v4
+        with:
+          path: target/mooneye-test-roms
+          key: mooneye-roms-v1
+
       - name: cargo test
         run: cargo test --release -p rgb_core
         env:
           RGB_BLARGG_ROM_DIR: ${{ github.workspace }}/target/blargg-test-roms
+          RGB_MOONEYE_ROM_DIR: ${{ github.workspace }}/target/mooneye-test-roms
