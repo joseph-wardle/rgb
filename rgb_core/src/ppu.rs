@@ -381,6 +381,19 @@ impl PPU {
         let prev_mode = self.mode;
         self.update_stat_and_interrupts(interrupt_flag);
 
+        // LYC=LY is latched by the PPU at dot 0 of each scanline — the moment
+        // LY increments.  Keeping this separate from the mode-transition checks
+        // above makes the hardware timing explicit: mode interrupts fire at the
+        // transition, LYC fires at dot 0.  On scanline 144 this also preserves
+        // the hardware ordering: VBlank fires first (above), then LYC=144.
+        //
+        // self.dot < cycles holds exactly when the step just crossed dot 0
+        // (the dot counter wrapped): after the wrap, dot = prev + cycles − 456,
+        // which is always < cycles.  Without a wrap, dot = prev + cycles ≥ cycles.
+        if self.dot < cycles {
+            self.update_lyc_compare(interrupt_flag);
+        }
+
         // Render the scanline when Mode 3 ends. On hardware the pixel pipeline
         // pushes pixels one-by-one throughout Mode 3; here we produce the whole
         // scanline at once at the Drawing→HBlank boundary.
@@ -523,13 +536,10 @@ impl PPU {
         // Bits 0–1: PPU mode.
         self.lcd_status = (self.lcd_status & !STAT_MODE_MASK) | (new_mode as u8);
 
-        // Bit 2: LYC=LY comparison. The hardware compares these registers
-        // continuously; we update once per step (instruction granularity).
-        if self.ly == self.lyc {
-            self.lcd_status |= STAT_LYC_FLAG;
-        } else {
-            self.lcd_status &= !STAT_LYC_FLAG;
-        }
+        // Bit 2: LYC=LY flag — updated at dot 0 by update_lyc_compare, and
+        // kept accurate on LYC register writes by write_byte(0xFF45).
+        // We do not touch it here so its value reflects the last latch point,
+        // not an arbitrary instruction boundary.
 
         self.mode = new_mode;
 
@@ -545,6 +555,36 @@ impl PPU {
         // that is the logical OR of all active and enabled sources.
         // "STAT blocking": consecutive sources that keep the signal high do
         // not retrigger — there is no low-to-high transition to detect.
+        let stat_line = self.stat_line_active();
+        if stat_line && !self.stat_line {
+            *interrupt_flag |= IF_STAT;
+        }
+        self.stat_line = stat_line;
+    }
+
+    /// Latch the LYC=LY comparison at dot 0 of the new scanline and fire the
+    /// STAT interrupt if the result creates a rising edge on the combined signal.
+    ///
+    /// Called once per scanline, immediately after `update_stat_and_interrupts`,
+    /// on the step that crosses dot 0 (when `self.dot < cycles` after the wrap).
+    ///
+    /// Keeping this separate from `update_stat_and_interrupts` documents the
+    /// hardware timing contract: mode-transition interrupts fire at the mode
+    /// boundary; the LYC interrupt fires at dot 0 of the matching scanline.
+    /// On scanline 144 this also preserves hardware ordering: the VBlank
+    /// interrupt fires first (in `update_stat_and_interrupts`), then the
+    /// LYC=144 interrupt fires here.
+    fn update_lyc_compare(&mut self, interrupt_flag: &mut u8) {
+        // Latch the LYC=LY comparison result into STAT bit 2.
+        if self.ly == self.lyc {
+            self.lcd_status |= STAT_LYC_FLAG;
+        } else {
+            self.lcd_status &= !STAT_LYC_FLAG;
+        }
+
+        // Re-evaluate the combined STAT line now that the LYC source may have
+        // changed.  Fire the interrupt on a rising edge, just as the mode-based
+        // sources do in update_stat_and_interrupts.
         let stat_line = self.stat_line_active();
         if stat_line && !self.stat_line {
             *interrupt_flag |= IF_STAT;
@@ -960,7 +1000,19 @@ impl Memory for PPU {
             0xFF42 => self.scroll_y = value,
             0xFF43 => self.scroll_x = value,
             0xFF44 => {} // LY is read-only; CPU writes are ignored
-            0xFF45 => self.lyc = value,
+            0xFF45 => {
+                self.lyc = value;
+                // Keep STAT bit 2 (LYC=LY flag) accurate so an immediate CPU
+                // read of STAT returns the correct value.  The LYC STAT
+                // interrupt does not fire here — it fires at dot 0 of the
+                // matching scanline via update_lyc_compare, when the PPU
+                // latches the comparison alongside the LY increment.
+                if self.ly == self.lyc {
+                    self.lcd_status |= STAT_LYC_FLAG;
+                } else {
+                    self.lcd_status &= !STAT_LYC_FLAG;
+                }
+            }
             0xFF46 => self.dma = value,
             0xFF47 => self.bg_palette = value,
             0xFF48 => self.obj_palette0 = value,
