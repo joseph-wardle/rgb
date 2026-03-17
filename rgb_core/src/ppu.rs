@@ -210,6 +210,13 @@ pub(crate) struct PPU {
     // field tracks the signal level from the previous step to detect that edge.
     stat_line: bool,
 
+    // When the LCD is re-enabled (LCDC bit 7: 0 → 1), the DMG requires one
+    // full frame for its LCD controller to synchronise with the panel before
+    // pixel output begins.  During that first frame the screen shows white and
+    // render_scanline is a no-op.  This flag is set on re-enable and cleared
+    // when LY wraps from 153 back to 0 (the start of the second frame).
+    first_frame: bool,
+
     // Output framebuffer: one byte per pixel, value 0–3 (DMG shade index).
     // 0 = white, 1 = light gray, 2 = dark gray, 3 = black.
     // The frontend maps these indices to actual colors at display time.
@@ -257,6 +264,7 @@ impl PPU {
             mode: Mode::OamScan, // (ly=0, dot=0) → Mode 2 per timing table
             mode3_length: DRAWING_DOTS_BASE, // recomputed at every OAM→Drawing transition
             stat_line: false,
+            first_frame: false, // post-boot-ROM start: PPU is already synchronised
             framebuffer: [0; SCREEN_WIDTH * SCREEN_HEIGHT],
             oam_cpu_read_pending: Cell::new(false),
         }
@@ -359,6 +367,7 @@ impl PPU {
             self.ly = (self.ly + 1) % TOTAL_SCANLINES;
             if self.ly == 0 {
                 self.window_line = 0; // new frame — reset the window's internal row counter
+                self.first_frame = false; // LCD sync complete; rendering resumes this frame
             }
         }
 
@@ -620,6 +629,14 @@ impl PPU {
     ///   `color_ids` — raw color index (0–3) used for sprite priority checks
     ///   `shades`    — final shade value (0–3) copied to the framebuffer
     fn render_scanline(&mut self) {
+        // The first frame after LCD re-enable is blank (white): the DMG LCD
+        // controller spends one full frame synchronising with the panel.
+        // Leave the framebuffer untouched; the frontend will display whatever
+        // was there before — typically the last rendered frame.
+        if self.first_frame {
+            return;
+        }
+
         let mut color_ids = [0u8; SCREEN_WIDTH]; // color indices for priority checks
         let mut shades = [0u8; SCREEN_WIDTH]; // output shades (default: white)
 
@@ -985,7 +1002,16 @@ impl Memory for PPU {
                 Mode::Drawing => {}
                 _ => self.oam[(address - 0xFE00) as usize] = value,
             },
-            0xFF40 => self.lcd_control = value,
+            0xFF40 => {
+                let was_enabled = self.lcd_enabled();
+                self.lcd_control = value;
+                // On a 0 → 1 transition of LCDC bit 7 the DMG LCD controller
+                // needs one full frame to sync with the panel before it can
+                // clock out pixels.  Suppress rendering for that frame.
+                if !was_enabled && self.lcd_enabled() {
+                    self.first_frame = true;
+                }
+            }
             0xFF41 => {
                 // Bits 3–6 are writable (interrupt enables). Bits 0–2 are
                 // read-only (PPU mode and LYC=LY flag) — preserve them.
