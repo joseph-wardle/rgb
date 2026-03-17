@@ -397,6 +397,39 @@ impl PPU {
         (self.lcd_control & LCDC_LCD_ENABLE) != 0
     }
 
+    /// Write to the STAT register (0xFF41) and return whether a spurious STAT
+    /// interrupt should be raised.
+    ///
+    /// ## Why this exists as a separate method
+    ///
+    /// On DMG hardware the STAT interrupt circuit OR's together all enabled
+    /// source signals. When the CPU writes to STAT the data bus briefly drives
+    /// all bits — including the read-only mode and LYC=LY bits — to whatever
+    /// value the CPU is writing. This momentarily asserts every source
+    /// simultaneously, regardless of what is actually enabled. If the STAT
+    /// interrupt line was previously low, the transient high pulse creates a
+    /// rising edge → a spurious STAT interrupt fires.
+    ///
+    /// The MMU calls this method for every CPU write to 0xFF41 and raises
+    /// `IF_STAT` (bit 1) when it returns `true`.
+    pub(crate) fn write_stat(&mut self, value: u8) -> bool {
+        // Apply the register write through the standard path, which preserves
+        // the read-only status bits (mode, LYC=LY flag) in bits 0–2.
+        self.write_byte(0xFF41, value);
+
+        // The spurious interrupt fires when the LCD is on and no source was
+        // already keeping the STAT line high. If the line is already high
+        // there is no rising edge, so no second interrupt should fire.
+        if self.lcd_enabled() && !self.stat_line {
+            // Mark the line high now so the next step() does not see a
+            // second rising edge if a real source also becomes active before
+            // update_stat_and_interrupts() runs.
+            self.stat_line = true;
+            return true;
+        }
+        false
+    }
+
     // -----------------------------------------------------------------------
     // Variable Mode 3 length (Phase 2 timing accuracy)
     // -----------------------------------------------------------------------
@@ -916,9 +949,12 @@ impl Memory for PPU {
             0xFF41 => {
                 // Bits 3–6 are writable (interrupt enables). Bits 0–2 are
                 // read-only (PPU mode and LYC=LY flag) — preserve them.
-                // Note: a DMG hardware quirk causes a spurious STAT interrupt
-                // when writing to this register during certain modes. Not yet
-                // modeled.
+                //
+                // CPU writes to STAT are routed through PPU::write_stat() by
+                // the MMU, which also handles the DMG spurious-interrupt quirk.
+                // This arm covers any non-CPU paths (e.g. tests writing directly
+                // to the PPU) and performs the bare register write without the
+                // interrupt side-effect.
                 self.lcd_status = (self.lcd_status & 0b0000_0111) | (value & 0b0111_1000);
             }
             0xFF42 => self.scroll_y = value,

@@ -148,6 +148,13 @@ impl MMU {
             0xFF0F => self.interrupts.flag = value,
             0xFFFF => self.interrupts.enable = value,
             0xFF10..=0xFF3F => self.devices.apu.write_byte(address, value),
+            0xFF41 => {
+                // Writing to STAT on DMG hardware fires a spurious STAT interrupt
+                // as a side-effect of the write bus glitch (see PPU::write_stat).
+                if self.devices.ppu.write_stat(value) {
+                    self.interrupts.flag |= 0x02; // IF bit 1: LCD STAT
+                }
+            }
             0xFF46 => {
                 // OAM DMA: copy 160 bytes from (value × 0x100) into OAM.
                 // On hardware this locks the CPU bus for 160 µs; here we model
@@ -162,7 +169,7 @@ impl MMU {
                 }
                 self.devices.ppu.write_byte(0xFF46, value); // record for reads
             }
-            0xFF40..=0xFF45 | 0xFF47..=0xFF4B => self.devices.ppu.write_byte(address, value),
+            0xFF40 | 0xFF42..=0xFF45 | 0xFF47..=0xFF4B => self.devices.ppu.write_byte(address, value),
             0xFF50 => {
                 // Writing any value to 0xFF50 unmaps the boot ROM.  On real
                 // hardware the boot ROM writes 0x01 here as its final act,
