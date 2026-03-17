@@ -106,8 +106,7 @@ impl Channel4 {
         if self.length.value == 0 {
             self.length.value = 64;
         }
-        self.envelope.volume = self.envelope.initial;
-        self.envelope.timer = self.envelope.period;
+        self.envelope.trigger();
         self.lfsr = 0x7FFF; // all bits set
         self.freq_timer = self.period_t_cycles();
 
