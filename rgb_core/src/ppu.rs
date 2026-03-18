@@ -239,6 +239,11 @@ impl Default for PPU {
 }
 
 impl PPU {
+    /// Create a `PPU` in the state the boot ROM leaves it in at PC = 0x0100.
+    ///
+    /// Use this when the emulator skips the boot ROM.  The register values
+    /// match what real DMG hardware has when the boot ROM hands control to
+    /// the cartridge, so games see the correct PPU state from the start.
     pub(crate) fn new() -> Self {
         PPU {
             vram: [0; 0x2000],
@@ -248,7 +253,10 @@ impl PPU {
             // would have left behind, otherwise games that wait for VBlank in their
             // init code hang forever (LCDC=0 disables the PPU and VBlank never fires).
             lcd_control: 0x91, // LCD on, BG tile data = 0x8000, BG tile map = 0x9800, BG enabled
-            lcd_status: 0x85,  // LYC=LY flag + mode 1 (VBlank) — matches real HW at PC=0x0100
+            // STAT at PC=0x0100: mode 2 (OAM Scan, bits 0–1 = 10), LYC=LY set (bit 2,
+            // because ly=0 == lyc=0).  Bit 7 is not stored here — it is always 1 on
+            // real hardware and is OR'd in at read time (see read_byte 0xFF41).
+            lcd_status: 0x06,
             scroll_y: 0,
             scroll_x: 0,
             ly: 0,
@@ -261,10 +269,42 @@ impl PPU {
             window_x: 0,
             window_line: 0,
             dot: 0,
-            mode: Mode::OamScan, // (ly=0, dot=0) → Mode 2 per timing table
+            mode: Mode::OamScan, // ly=0, dot=0 → Mode 2 per the PPU timing table
             mode3_length: DRAWING_DOTS_BASE, // recomputed at every OAM→Drawing transition
             stat_line: false,
             first_frame: false, // post-boot-ROM start: PPU is already synchronised
+            framebuffer: [0; SCREEN_WIDTH * SCREEN_HEIGHT],
+            oam_cpu_read_pending: Cell::new(false),
+        }
+    }
+
+    /// Create a `PPU` in the power-on cold-start state.
+    ///
+    /// Use this when a boot ROM image is supplied: the boot ROM will
+    /// initialise all PPU registers before the cartridge runs, so we start
+    /// from an all-zeros, LCD-off state.
+    pub(crate) fn cold_start() -> Self {
+        PPU {
+            vram: [0; 0x2000],
+            oam: [0; 0xA0],
+            lcd_control: 0x00, // LCD/PPU disabled
+            lcd_status: 0x00,  // mode 0 (HBlank), no flags
+            scroll_y: 0,
+            scroll_x: 0,
+            ly: 0,
+            lyc: 0,
+            dma: 0x00,
+            bg_palette: 0x00,
+            obj_palette0: 0x00,
+            obj_palette1: 0x00,
+            window_y: 0,
+            window_x: 0,
+            window_line: 0,
+            dot: 0,
+            mode: Mode::HBlank,
+            mode3_length: DRAWING_DOTS_BASE,
+            stat_line: false,
+            first_frame: false,
             framebuffer: [0; SCREEN_WIDTH * SCREEN_HEIGHT],
             oam_cpu_read_pending: Cell::new(false),
         }
@@ -971,7 +1011,10 @@ impl Memory for PPU {
                 _ => self.oam[(address - 0xFE00) as usize],
             },
             0xFF40 => self.lcd_control,
-            0xFF41 => self.lcd_status,
+            // STAT bit 7 always reads as 1 on DMG hardware (the bit is unused
+            // and the pin is pulled high).  The stored value never has bit 7
+            // set; we OR it in here so read-modify-write code works correctly.
+            0xFF41 => self.lcd_status | 0x80,
             0xFF42 => self.scroll_y,
             0xFF43 => self.scroll_x,
             0xFF44 => self.ly,

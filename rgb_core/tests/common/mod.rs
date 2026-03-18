@@ -215,8 +215,43 @@ fn run_mooneye(path: &Path) -> bool {
             prev_pc = pc;
         }
 
-        if stable_count >= STABLE_FRAMES_REQUIRED {
-            return gb.mooneye_pass();
+        // Mooneye ROMs signal completion by looping on `LD B,B; JR -2`
+        // (bytes 0x40 0x18 0xFE).  Frame timing can land the PC on either
+        // instruction, so we recognise the 3-byte pattern at prev_pc or at
+        // prev_pc - 1.  This avoids false positives from LY-polling loops
+        // that happen to be frame-synchronised.
+        let done_pc = if gb.peek_byte(prev_pc) == 0x40
+            && gb.peek_byte(prev_pc + 1) == 0x18
+            && gb.peek_byte(prev_pc + 2) == 0xFE
+        {
+            // PC is on the `LD B,B` instruction.
+            stable_count >= STABLE_FRAMES_REQUIRED
+        } else if gb.peek_byte(prev_pc.wrapping_sub(1)) == 0x40
+            && gb.peek_byte(prev_pc) == 0x18
+            && gb.peek_byte(prev_pc + 1) == 0xFE
+        {
+            // PC is on the `JR -2` instruction.
+            stable_count >= STABLE_FRAMES_REQUIRED
+        } else {
+            false
+        };
+        if done_pc {
+            let pass = gb.mooneye_pass();
+            if !pass {
+                // Read HRAM diagnostic bytes left by the mooneye test framework
+                // when a sub-test fails (test_addr, test_got, test_reg, test_mask).
+                let addr = gb.peek_byte(0xFF80) as u16 | (gb.peek_byte(0xFF81) as u16) << 8;
+                let got  = gb.peek_byte(0xFF82);
+                let reg  = gb.peek_byte(0xFF83);
+                let mask = gb.peek_byte(0xFF84);
+                eprintln!(
+                    "MOONEYE FAIL {}: test_addr=0x{addr:04X} reg=0x{reg:02X} \
+                     mask=0x{mask:02X} got=0x{got:02X} regs=[{}]",
+                    path.display(),
+                    gb.mooneye_regs_debug()
+                );
+            }
+            return pass;
         }
 
         if start.elapsed() >= TIMEOUT {

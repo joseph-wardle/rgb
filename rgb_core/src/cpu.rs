@@ -1512,7 +1512,13 @@ impl CPU {
 
             // EI
             0xFB => {
-                self.ime_scheduled = Some(1);
+                // EI enables IME after the next instruction (1-instruction delay).
+                // Don't override a schedule that's already at Some(0) (about to
+                // fire at the end of this step) — let EI1's scheduled enable
+                // proceed rather than being overwritten by a consecutive EI2.
+                if self.ime_scheduled != Some(0) {
+                    self.ime_scheduled = Some(1);
+                }
             } // EI
 
             // CB PREFIX
