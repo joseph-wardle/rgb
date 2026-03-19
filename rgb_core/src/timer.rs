@@ -62,14 +62,21 @@ const TIMER_INTERRUPT_BIT: u8 = 1 << 2;
 /// System counter value at the moment the boot ROM hands control to the
 /// cartridge (PC = 0x0100 on real hardware).
 ///
-/// The boot ROM runs for 0xABCC T-cycles before writing 0x01 to 0xFF50 and
-/// jumping to the cartridge entry point.  Starting the counter here ensures
-/// DIV, TIMA, and the APU frame sequencer all have the correct phase from
-/// the very first instruction the game executes.
+/// The boot ROM executes for a fixed number of T-cycles before writing 0x01
+/// to 0xFF50 and jumping to the cartridge entry point at PC = 0x0100.
+/// Starting the counter here ensures DIV, TIMA, and the APU frame sequencer
+/// all have the correct phase from the very first instruction the game executes.
+///
+/// The value 0xABD0 was determined empirically: it gives DIV = 0xAB (matching
+/// documented DMG boot state) and places the sub-DIV phase so that Blargg's
+/// `instr_timing` test — which calibrates a cycle-accurate timer and checks
+/// the exact M-cycle at which TIMA overflows — passes its init_timer sanity
+/// check.  The phase must be correct to within a single M-cycle (4 T-cycles)
+/// for that test to succeed.
 ///
 /// When the emulator boots *with* a boot ROM image the counter starts at 0
 /// (power-on state) and reaches this value naturally as the boot ROM runs.
-const SYSTEM_COUNTER_POST_BOOT: u16 = 0xABCC;
+const SYSTEM_COUNTER_POST_BOOT: u16 = 0xABD0;
 
 /// T-cycles in one machine cycle on the DMG.
 const T_CYCLES_PER_M_CYCLE: u16 = 4;
