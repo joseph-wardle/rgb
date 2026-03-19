@@ -97,9 +97,16 @@ pub(crate) struct MMU {
     // lockout (0xFE00–0xFE9F) — the full CPU bus restriction is not modelled.
     //
     // oam_dma_remaining counts the cycles left in the current transfer:
-    //   161      = just started, startup delay (no bytes copied yet)
-    //   160..=1  = transferring byte (160 − remaining)
+    //   162      = freshly triggered, next tick enters startup delay
+    //   161      = startup delay (OAM still accessible this cycle)
+    //   160      = locked, no copy yet (first locked cycle)
+    //   159..=1  = transferring byte (159 − remaining + 1)
     //   0        = idle, no transfer in progress
+    //
+    // A fresh trigger from idle (remaining=0) sets remaining=162, giving one
+    // accessible cycle at 161 before lockout begins at 160.  A restart while
+    // a transfer is already active (remaining>0) sets remaining=161, skipping
+    // the accessible cycle — the OAM bus is already locked.
     oam_dma_remaining: u8,
     oam_dma_source: u16, // base address latched from the value written to 0xFF46
 }
@@ -223,18 +230,20 @@ impl MMU {
                 // so it can be read back via 0xFF46.
                 self.devices.ppu.write_byte(0xFF46, value);
                 self.oam_dma_source = (value as u16) << 8;
-                // Startup timing:
-                //   remaining=162 → tick→161 (accessible) → tick→160 (locked, no copy) →
-                //   tick→159 (copy byte 0) → … → tick→0 (done)
-                // Fresh start or restart during active copy (remaining < 161): use 162,
-                //   giving one accessible cycle (at remaining=161) before lockout.
-                // Restart during startup phase (remaining >= 161): use 161,
-                //   skipping the accessible cycle (161 is immediately locked by < 161).
-                //   This matches oam_dma_start round 2: two back-to-back triggers hit
-                //   this case and produce 0 accessible cycles.
-                self.oam_dma_remaining = if self.oam_dma_remaining >= 161 { 161 } else { 162 };
+                // Fresh start from idle: remaining=162 → tick→161 (OAM accessible) →
+                //   tick→160 (locked, no copy) → tick→159 (copy byte 0) → … → tick→0.
+                // Restart during active transfer: remaining=161 → tick→160 (locked
+                //   immediately, no accessible cycle).  Back-to-back DMA triggers
+                //   hit this path because the first trigger has already set remaining>0.
+                self.oam_dma_remaining = if self.oam_dma_remaining == 0 {
+                    162
+                } else {
+                    161
+                };
             }
-            0xFF40 | 0xFF42..=0xFF45 | 0xFF47..=0xFF4B => self.devices.ppu.write_byte(address, value),
+            0xFF40 | 0xFF42..=0xFF45 | 0xFF47..=0xFF4B => {
+                self.devices.ppu.write_byte(address, value)
+            }
             0xFF50 => {
                 // Writing any value to 0xFF50 unmaps the boot ROM.  On real
                 // hardware the boot ROM writes 0x01 here as its final act,

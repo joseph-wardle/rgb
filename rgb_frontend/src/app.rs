@@ -117,8 +117,8 @@ impl ApplicationHandler for App {
                 .expect("failed to create window"),
         );
 
-        let pixels = renderer::create_pixels(Arc::clone(&window))
-            .expect("failed to create pixel buffer");
+        let pixels =
+            renderer::create_pixels(Arc::clone(&window)).expect("failed to create pixel buffer");
         self.pixels = Some(pixels);
         self.window = Some(window);
     }
@@ -169,10 +169,12 @@ impl ApplicationHandler for App {
 
             // ── Resize ───────────────────────────────────────────────
             WindowEvent::Resized(size) => {
-                if size.width > 0 && size.height > 0
-                    && let Some(ref mut pixels) = self.pixels {
-                        let _ = pixels.resize_surface(size.width, size.height);
-                    }
+                if size.width > 0
+                    && size.height > 0
+                    && let Some(ref mut pixels) = self.pixels
+                {
+                    let _ = pixels.resize_surface(size.width, size.height);
+                }
             }
 
             // ── Render ───────────────────────────────────────────────

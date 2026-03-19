@@ -419,10 +419,7 @@ impl PPU {
         // carry dot past OAM_SCAN_DOTS in a single step (max instruction = 24
         // T-cycles; OAM_SCAN_DOTS = 80), so this branch fires at most once
         // per visible scanline, on the step that crosses dot 80.
-        if self.ly < VISIBLE_SCANLINES
-            && prev_dot < OAM_SCAN_DOTS
-            && self.dot >= OAM_SCAN_DOTS
-        {
+        if self.ly < VISIBLE_SCANLINES && prev_dot < OAM_SCAN_DOTS && self.dot >= OAM_SCAN_DOTS {
             let sprites = self.scan_oam_for_scanline();
             self.mode3_length = self.compute_mode3_length(&sprites);
         }

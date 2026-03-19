@@ -169,6 +169,9 @@ impl DMG {
     /// Returns the CPU's B/C/D/E/H/L registers as a formatted string for test diagnostics.
     pub fn mooneye_regs_debug(&self) -> String {
         let r = self.cpu.registers();
-        format!("B={} C={} D={} E={} H={} L={}", r.b, r.c, r.d, r.e, r.h, r.l)
+        format!(
+            "B={} C={} D={} E={} H={} L={}",
+            r.b, r.c, r.d, r.e, r.h, r.l
+        )
     }
 }

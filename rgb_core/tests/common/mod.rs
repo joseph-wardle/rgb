@@ -241,8 +241,8 @@ fn run_mooneye(path: &Path) -> bool {
                 // Read HRAM diagnostic bytes left by the mooneye test framework
                 // when a sub-test fails (test_addr, test_got, test_reg, test_mask).
                 let addr = gb.peek_byte(0xFF80) as u16 | (gb.peek_byte(0xFF81) as u16) << 8;
-                let got  = gb.peek_byte(0xFF82);
-                let reg  = gb.peek_byte(0xFF83);
+                let got = gb.peek_byte(0xFF82);
+                let reg = gb.peek_byte(0xFF83);
                 let mask = gb.peek_byte(0xFF84);
                 eprintln!(
                     "MOONEYE FAIL {}: test_addr=0x{addr:04X} reg=0x{reg:02X} \
@@ -357,8 +357,7 @@ fn download_suite(suite: &Suite, dir: &Path) -> Result<(), String> {
         .map_err(|e| format!("read response body: {e}"))?;
 
     let mut cursor = io::Cursor::new(bytes);
-    let mut archive =
-        zip::ZipArchive::new(&mut cursor).map_err(|e| format!("open zip: {e}"))?;
+    let mut archive = zip::ZipArchive::new(&mut cursor).map_err(|e| format!("open zip: {e}"))?;
 
     let root = Path::new(suite.archive_root);
     for i in 0..archive.len() {
@@ -383,8 +382,7 @@ fn download_suite(suite: &Suite, dir: &Path) -> Result<(), String> {
             continue;
         }
         if let Some(parent) = out_path.parent() {
-            fs::create_dir_all(parent)
-                .map_err(|e| format!("mkdir {}: {e}", parent.display()))?;
+            fs::create_dir_all(parent).map_err(|e| format!("mkdir {}: {e}", parent.display()))?;
         }
         let mut outfile = fs::File::create(&out_path)
             .map_err(|e| format!("create {}: {e}", out_path.display()))?;
@@ -392,8 +390,7 @@ fn download_suite(suite: &Suite, dir: &Path) -> Result<(), String> {
             .map_err(|e| format!("write {}: {e}", out_path.display()))?;
     }
 
-    fs::write(dir.join(suite.ready_marker), b"")
-        .map_err(|e| format!("write ready marker: {e}"))?;
+    fs::write(dir.join(suite.ready_marker), b"").map_err(|e| format!("write ready marker: {e}"))?;
 
     Ok(())
 }

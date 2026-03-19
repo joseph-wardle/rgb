@@ -11,13 +11,13 @@ mod audio;
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
+use wasm_bindgen::prelude::*;
 use web_sys::{CanvasRenderingContext2d, HtmlCanvasElement, KeyboardEvent};
 
+use rgb_core::Button;
 use rgb_core::cartridge::CartridgeKind;
 use rgb_core::gameboy::DMG;
-use rgb_core::Button;
 use rgb_core::{SCREEN_HEIGHT, SCREEN_WIDTH};
 
 /// Minimal audio output trait — implemented by [`audio::WebAudioSink`] and
@@ -91,8 +91,7 @@ fn start_raf_loop(
     mut audio: Box<dyn AudioSink>,
 ) {
     // The RAF closure must be able to re-schedule itself.
-    let raf_closure: Rc<RefCell<Option<Closure<dyn FnMut(f64)>>>> =
-        Rc::new(RefCell::new(None));
+    let raf_closure: Rc<RefCell<Option<Closure<dyn FnMut(f64)>>>> = Rc::new(RefCell::new(None));
     let raf_closure_outer = Rc::clone(&raf_closure);
 
     // Game Boy frame period in milliseconds (1000 / 59.7275).
