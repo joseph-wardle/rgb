@@ -59,9 +59,26 @@ pub struct VolumeEnvelope {
 }
 
 impl VolumeEnvelope {
-    /// Clock the volume envelope.  The timer decrements each call; when it
-    /// reaches 0 the volume steps by ±1 and the timer reloads.  A period of 0
-    /// means the envelope is frozen (volume holds indefinitely).
+    /// Initialise envelope state on channel trigger.
+    ///
+    /// Volume is loaded from the initial value.  The internal timer is
+    /// reloaded from the period, with one hardware subtlety: a period of 0
+    /// loads the timer as 8, not 0.  The envelope is still frozen (see
+    /// [`clock`]) — the distinction only matters for zombie-mode register
+    /// writes that interact with the live timer value.
+    pub fn trigger(&mut self) {
+        self.volume = self.initial;
+        self.timer = if self.period == 0 { 8 } else { self.period };
+    }
+
+    /// Clock the volume envelope (called at 64 Hz from frame-sequencer step 7).
+    ///
+    /// The timer decrements each call; when it hits 0 the volume steps by ±1
+    /// and the timer reloads from the period.  Volume clamps at the boundary
+    /// (0 or 15) and the timer keeps running — the envelope freezes in place.
+    ///
+    /// A period of 0 means the envelope is completely frozen: the timer does
+    /// not run and the volume does not change.
     pub fn clock(&mut self) {
         if self.period == 0 {
             return;

@@ -121,8 +121,7 @@ impl Channel1 {
             self.length.value = 64;
         }
         self.freq_timer = (2048 - self.freq) * 4;
-        self.envelope.volume = self.envelope.initial;
-        self.envelope.timer = self.envelope.period;
+        self.envelope.trigger();
         self.sweep_freq = self.freq;
         self.sweep_timer = if self.sweep.period != 0 {
             self.sweep.period

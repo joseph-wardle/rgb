@@ -17,7 +17,11 @@ struct Devices {
 }
 
 impl Devices {
-    fn new(cartridge: Box<dyn Cartridge>) -> Self {
+    /// Devices in the state the boot ROM leaves them at PC = 0x0100.
+    ///
+    /// Use when the emulator skips the boot ROM so that every device starts
+    /// with the register values a real Game Boy has at the cartridge entry point.
+    fn post_boot(cartridge: Box<dyn Cartridge>) -> Self {
         Self {
             cartridge,
             apu: APU::new(),
@@ -25,6 +29,21 @@ impl Devices {
             joypad: Joypad::new(),
             serial: Serial::new(),
             timer: Timer::new(),
+        }
+    }
+
+    /// Devices in the power-on cold-start state.
+    ///
+    /// Use when a boot ROM image is supplied: the boot ROM will set all
+    /// device registers before the cartridge runs.
+    fn cold_start(cartridge: Box<dyn Cartridge>) -> Self {
+        Self {
+            cartridge,
+            apu: APU::new(),
+            ppu: PPU::cold_start(),
+            joypad: Joypad::new(),
+            serial: Serial::new(),
+            timer: Timer::cold_start(),
         }
     }
 }
@@ -38,7 +57,19 @@ struct Interrupts {
 }
 
 impl Interrupts {
-    fn new() -> Self {
+    /// Interrupt state the boot ROM leaves at PC = 0x0100.
+    ///
+    /// IF = 0x01: the boot ROM triggers a VBlank interrupt (bit 0) as part of
+    /// its final sync.  Upper 3 bits always read as 1 (hardware pull-up).
+    fn post_boot() -> Self {
+        Self {
+            flag: 0x01,
+            enable: 0x00,
+        }
+    }
+
+    /// Interrupt state at power-on.
+    fn cold_start() -> Self {
         Self {
             flag: 0x00,
             enable: 0x00,
@@ -55,6 +86,29 @@ pub(crate) struct MMU {
     wram: [u8; 0x2000],          // Work RAM: 8 KiB, two fixed 4 KiB banks (DMG has no banking)
     boot_rom: Option<Box<[u8]>>, // 256-byte boot ROM image; None = skip boot ROM
     boot_rom_mapped: bool,       // true until the game writes 0xFF50 to unmap it
+
+    // OAM DMA state machine.
+    //
+    // Writing to 0xFF46 initiates a transfer: the hardware copies 160 bytes
+    // from (source × 0x100) into OAM, one byte per M-cycle, preceded by a
+    // 1-cycle startup delay.  On real hardware the CPU bus is restricted to
+    // HRAM during the transfer; games run their DMA handler ("trampoline")
+    // from HRAM to work around this.  We only enforce the OAM portion of the
+    // lockout (0xFE00–0xFE9F) — the full CPU bus restriction is not modelled.
+    //
+    // oam_dma_remaining counts the cycles left in the current transfer:
+    //   162      = freshly triggered, next tick enters startup delay
+    //   161      = startup delay (OAM still accessible this cycle)
+    //   160      = locked, no copy yet (first locked cycle)
+    //   159..=1  = transferring byte (159 − remaining + 1)
+    //   0        = idle, no transfer in progress
+    //
+    // A fresh trigger from idle (remaining=0) sets remaining=162, giving one
+    // accessible cycle at 161 before lockout begins at 160.  A restart while
+    // a transfer is already active (remaining>0) sets remaining=161, skipping
+    // the accessible cycle — the OAM bus is already locked.
+    oam_dma_remaining: u8,
+    oam_dma_source: u16, // base address latched from the value written to 0xFF46
 }
 
 #[expect(clippy::upper_case_acronyms)]
@@ -69,13 +123,24 @@ enum MemoryRegion {
 
 impl MMU {
     pub(crate) fn new(cartridge: Box<dyn Cartridge>, boot_rom: Option<Box<[u8]>>) -> Self {
+        // When a boot ROM is provided the hardware starts cold and the boot
+        // ROM initialises every device register itself.  When no boot ROM is
+        // provided we jump straight to PC = 0x0100 and must start each device
+        // in the state the boot ROM would have left it in.
+        let (devices, interrupts) = if boot_rom.is_some() {
+            (Devices::cold_start(cartridge), Interrupts::cold_start())
+        } else {
+            (Devices::post_boot(cartridge), Interrupts::post_boot())
+        };
         MMU {
-            devices: Devices::new(cartridge),
-            interrupts: Interrupts::new(),
+            devices,
+            interrupts,
             hram: [0x00; 0x7F],
             wram: [0x00; 0x2000],
             boot_rom_mapped: boot_rom.is_some(),
             boot_rom,
+            oam_dma_remaining: 0,
+            oam_dma_source: 0,
         }
     }
 
@@ -109,12 +174,15 @@ impl MMU {
         let value = match address {
             0xFF00 => self.devices.joypad.read(),
             0xFF01 => self.devices.serial.sb,
-            0xFF02 => self.devices.serial.sc,
+            // SC (FF02): bits 1–6 are unused and read as 1 on real hardware.
+            0xFF02 => self.devices.serial.sc | 0x7E,
             0xFF04 => self.devices.timer.div(),
-            0xFF05 => self.devices.timer.tima,
+            0xFF05 => self.devices.timer.read_tima(),
             0xFF06 => self.devices.timer.tma,
-            0xFF07 => self.devices.timer.tac,
-            0xFF0F => self.interrupts.flag,
+            // TAC (FF07): upper 5 bits are unused and read as 1 on real hardware.
+            0xFF07 => self.devices.timer.tac | 0xF8,
+            // IF (FF0F): upper 3 bits are unused and read as 1 on real hardware.
+            0xFF0F => self.interrupts.flag | 0xE0,
             0xFFFF => self.interrupts.enable,
             0xFF10..=0xFF3F => self.devices.apu.read_byte(address),
             0xFF40..=0xFF4B => self.devices.ppu.read_byte(address),
@@ -144,25 +212,38 @@ impl MMU {
             }
             0xFF05 => self.devices.timer.write_tima(value),
             0xFF06 => self.devices.timer.tma = value,
-            0xFF07 => self.devices.timer.tac = value,
+            0xFF07 => self.devices.timer.write_tac(value),
             0xFF0F => self.interrupts.flag = value,
             0xFFFF => self.interrupts.enable = value,
             0xFF10..=0xFF3F => self.devices.apu.write_byte(address, value),
-            0xFF46 => {
-                // OAM DMA: copy 160 bytes from (value × 0x100) into OAM.
-                // On hardware this locks the CPU bus for 160 µs; here we model
-                // it as an instantaneous copy, which is sufficient for games
-                // that wait for the transfer to complete before accessing OAM.
-                // The DMA uses the PPU's internal bus, bypassing the mode-based
-                // access restriction that applies to the CPU bus.
-                let source = (value as u16) << 8;
-                for i in 0..0xA0u16 {
-                    let byte = self.read_byte(source + i);
-                    self.devices.ppu.write_oam_direct(i as usize, byte);
+            0xFF41 => {
+                // Writing to STAT on DMG hardware fires a spurious STAT interrupt
+                // as a side-effect of the write bus glitch (see PPU::write_stat).
+                if self.devices.ppu.write_stat(value) {
+                    self.interrupts.flag |= 0x02; // IF bit 1: LCD STAT
                 }
-                self.devices.ppu.write_byte(0xFF46, value); // record for reads
             }
-            0xFF40..=0xFF45 | 0xFF47..=0xFF4B => self.devices.ppu.write_byte(address, value),
+            0xFF46 => {
+                // Writing to 0xFF46 starts an OAM DMA transfer (see the
+                // oam_dma_remaining field and tick_m_cycle for the transfer
+                // state machine).  The DMA register value is stored in the PPU
+                // so it can be read back via 0xFF46.
+                self.devices.ppu.write_byte(0xFF46, value);
+                self.oam_dma_source = (value as u16) << 8;
+                // Fresh start from idle: remaining=162 → tick→161 (OAM accessible) →
+                //   tick→160 (locked, no copy) → tick→159 (copy byte 0) → … → tick→0.
+                // Restart during active transfer: remaining=161 → tick→160 (locked
+                //   immediately, no accessible cycle).  Back-to-back DMA triggers
+                //   hit this path because the first trigger has already set remaining>0.
+                self.oam_dma_remaining = if self.oam_dma_remaining == 0 {
+                    162
+                } else {
+                    161
+                };
+            }
+            0xFF40 | 0xFF42..=0xFF45 | 0xFF47..=0xFF4B => {
+                self.devices.ppu.write_byte(address, value)
+            }
             0xFF50 => {
                 // Writing any value to 0xFF50 unmaps the boot ROM.  On real
                 // hardware the boot ROM writes 0x01 here as its final act,
@@ -175,10 +256,14 @@ impl MMU {
     }
 }
 
-impl Memory for MMU {
-    fn read_byte(&self, address: u16) -> u8 {
-        // When the boot ROM is mapped it shadows cartridge addresses 0x0000–0x00FF.
-        // The boot ROM unmaps itself by writing to 0xFF50.
+impl MMU {
+    /// Route a read to the appropriate device or memory region.
+    ///
+    /// Used directly by the OAM DMA hardware (which has its own bus) and by
+    /// `Memory::read_byte`.  On real hardware the CPU path would enforce a
+    /// bus restriction during DMA; that lockout is not yet implemented here.
+    fn read_byte_dispatch(&self, address: u16) -> u8 {
+        // The boot ROM shadows cartridge addresses 0x0000–0x00FF while mapped.
         if self.boot_rom_mapped
             && let Some(ref rom) = self.boot_rom
             && (address as usize) < rom.len()
@@ -195,8 +280,32 @@ impl Memory for MMU {
             MemoryRegion::Unused => 0,
         }
     }
+}
+
+impl Memory for MMU {
+    fn read_byte(&self, address: u16) -> u8 {
+        // During OAM DMA the CPU cannot read from OAM (0xFE00–0xFE9F).
+        // The lockout activates at remaining < 161: the single accessible
+        // cycle is when remaining=161 (one M-cycle after the trigger write).
+        // The DMA transfer itself uses `read_byte_dispatch` (its own bus).
+        if self.oam_dma_remaining > 0
+            && self.oam_dma_remaining < 161
+            && matches!(address, 0xFE00..=0xFE9F)
+        {
+            return 0xFF;
+        }
+        self.read_byte_dispatch(address)
+    }
 
     fn write_byte(&mut self, address: u16, value: u8) {
+        // During OAM DMA the CPU cannot write to OAM (0xFE00–0xFE9F).
+        // The same startup-delay rule applies: lockout only when remaining < 161.
+        if self.oam_dma_remaining > 0
+            && self.oam_dma_remaining < 161
+            && matches!(address, 0xFE00..=0xFE9F)
+        {
+            return;
+        }
         match self.get_memory_region(address) {
             MemoryRegion::Cartridge => self.devices.cartridge.write_byte(address, value),
             MemoryRegion::PPU => self.devices.ppu.write_byte(address, value),
@@ -222,6 +331,24 @@ impl MemoryBus for MMU {
         self.devices.timer.step(4, &mut self.interrupts.flag);
         self.devices.ppu.step(4, &mut self.interrupts.flag);
         self.devices.apu.step(4, counter_before);
+
+        // Advance an active OAM DMA transfer by one M-cycle.
+        //
+        // The first cycle (161 → 160) is a startup delay — the DMG hardware
+        // needs one cycle to set up the transfer before bytes begin flowing.
+        // Each subsequent cycle (160 → 1) copies one byte from the source
+        // address into OAM.  The DMA reads via read_byte_dispatch, which uses
+        // the DMA's own bus and is not subject to the CPU bus restriction.
+        if self.oam_dma_remaining > 0 {
+            self.oam_dma_remaining -= 1;
+            if self.oam_dma_remaining < 160 {
+                let byte_index = (159 - self.oam_dma_remaining) as usize;
+                let src = self.oam_dma_source + byte_index as u16;
+                let byte = self.read_byte_dispatch(src);
+                self.devices.ppu.write_oam_direct(byte_index, byte);
+            }
+        }
+
         self.log_step(
             4,
             self.devices.timer.div(),

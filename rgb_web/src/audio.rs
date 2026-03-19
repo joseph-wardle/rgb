@@ -4,7 +4,7 @@
 //! backed by the browser's Web Audio API.  Samples are buffered in a simple
 //! ring buffer and drained by the audio processing callback.
 
-use rgb_frontend::AudioSink;
+use crate::AudioSink;
 use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::rc::Rc;

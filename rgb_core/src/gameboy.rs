@@ -144,4 +144,34 @@ impl DMG {
     pub fn peek_byte(&self, address: u16) -> u8 {
         self.bus.read_byte(address)
     }
+
+    /// Current program counter of the CPU.
+    ///
+    /// Intended for test harnesses that need to detect when execution has
+    /// reached a specific address — for example the `LD B,B` done-signal
+    /// loop used by mooneye-test-suite ROMs.
+    pub fn cpu_pc(&self) -> u16 {
+        self.cpu.registers().pc
+    }
+
+    /// Returns `true` when the CPU registers contain the mooneye-test-suite
+    /// PASS signature: B=3, C=5, D=8, E=13, H=21, L=34 (Fibonacci sequence).
+    ///
+    /// Mooneye ROMs signal test completion by loading those values and then
+    /// executing `LD B,B` (opcode 0x40) in a tight loop.  Call this after
+    /// detecting a stable PC at a `LD B,B` instruction to distinguish pass
+    /// from fail.
+    pub fn mooneye_pass(&self) -> bool {
+        let r = self.cpu.registers();
+        r.b == 3 && r.c == 5 && r.d == 8 && r.e == 13 && r.h == 21 && r.l == 34
+    }
+
+    /// Returns the CPU's B/C/D/E/H/L registers as a formatted string for test diagnostics.
+    pub fn mooneye_regs_debug(&self) -> String {
+        let r = self.cpu.registers();
+        format!(
+            "B={} C={} D={} E={} H={} L={}",
+            r.b, r.c, r.d, r.e, r.h, r.l
+        )
+    }
 }

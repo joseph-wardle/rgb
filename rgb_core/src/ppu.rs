@@ -4,17 +4,20 @@
 //! grid across 154 lines (144 visible + 10 VBlank), cycling through four
 //! modes per visible scanline:
 //!
-//!   Mode 2 (OAM Scan) →  80 dots — locate sprites for this scanline
-//!   Mode 3 (Drawing)  → 172 dots — pixel pipeline pushes pixels to the LCD
-//!   Mode 0 (HBlank)   → 204 dots — horizontal blank between scanlines
+//!   Mode 2 (OAM Scan) →   80 dots  — locate sprites for this scanline
+//!   Mode 3 (Drawing)  → 172+ dots  — pixel pipeline pushes pixels to the LCD;
+//!                                     duration grows with SCX, sprites, window
+//!   Mode 0 (HBlank)   → 204− dots  — horizontal blank absorbs Mode 3 overflow
 //!
-//! During VBlank (scanlines 144–153) the PPU remains in Mode 1 for the
-//! entire scanline. One full frame is 70,224 dots (~59.7 fps).
+//! Every visible scanline is exactly 456 dots: 80 + mode3_length + hblank = 456.
+//! During VBlank (scanlines 144–153) the PPU stays in Mode 1 for all 456 dots.
+//! One full frame is 70,224 dots (~59.7 fps).
 //!
 //! # What is implemented
 //!
-//! **Timing state machine** (Phase 2): LY counter, dot counter, mode
-//! transitions, VBlank and STAT interrupt generation.
+//! **Timing state machine** (Phase 2): LY counter, dot counter, variable Mode 3
+//! length from SCX fine-scroll / sprite / window penalties, mode transitions,
+//! VBlank and STAT interrupt generation.
 //!
 //! **Background rendering** (Phase 3): tile data fetch, tile map lookup,
 //! SCX/SCY viewport scroll, BGP palette application. Each scanline is
@@ -31,10 +34,6 @@
 //! silently dropped when accessing VRAM during Mode 3, or OAM during
 //! Mode 2 or Mode 3 — matching DMG hardware. OAM DMA bypasses this
 //! via [`PPU::write_oam_direct`].
-//!
-//! # What is not yet implemented
-//!
-//! - Mode 3 variable-length timing from SCX/sprite/window penalties
 
 use std::cell::Cell;
 
@@ -65,11 +64,11 @@ const TOTAL_SCANLINES: u8 = 154;
 /// visible scanline to build the list of sprites that appear on this line.
 const OAM_SCAN_DOTS: u16 = 80;
 
-/// Mode 3 (Drawing): the pixel pipeline runs for at least 172 dots.
-/// The actual length grows with SCX fine-scroll, sprite hits, and window
-/// activation (not yet modeled; see Phase 5). Mode 0 (HBlank) fills the
-/// remainder: 456 − 80 − 172 = 204 dots minimum.
-const DRAWING_DOTS: u16 = 172;
+/// Mode 3 (Drawing): the pixel pipeline runs for *at least* 172 dots.
+/// The actual duration is longer on scanlines with SCX fine-scroll, sprites,
+/// or window activation — see [`PPU::compute_mode3_length`].
+/// Mode 0 (HBlank) absorbs the difference: 456 − 80 − mode3_length.
+const DRAWING_DOTS_BASE: u16 = 172;
 
 // ---------------------------------------------------------------------------
 // Register bit masks — named for their register and function
@@ -202,13 +201,21 @@ pub(crate) struct PPU {
     window_line: u8,
 
     // Timing state machine
-    dot: u16,   // T-cycle position within the current scanline (0–455)
-    mode: Mode, // current PPU mode; kept in sync with lcd_status bits 0–1
+    dot: u16,          // T-cycle position within the current scanline (0–455)
+    mode: Mode,        // current PPU mode; kept in sync with lcd_status bits 0–1
+    mode3_length: u16, // cached Mode 3 dot-count for this scanline (172 + penalties)
 
     // The STAT interrupt fires on the rising edge of a combined signal that is
     // the logical OR of all currently active and enabled STAT sources. This
     // field tracks the signal level from the previous step to detect that edge.
     stat_line: bool,
+
+    // When the LCD is re-enabled (LCDC bit 7: 0 → 1), the DMG requires one
+    // full frame for its LCD controller to synchronise with the panel before
+    // pixel output begins.  During that first frame the screen shows white and
+    // render_scanline is a no-op.  This flag is set on re-enable and cleared
+    // when LY wraps from 153 back to 0 (the start of the second frame).
+    first_frame: bool,
 
     // Output framebuffer: one byte per pixel, value 0–3 (DMG shade index).
     // 0 = white, 1 = light gray, 2 = dark gray, 3 = black.
@@ -232,6 +239,11 @@ impl Default for PPU {
 }
 
 impl PPU {
+    /// Create a `PPU` in the state the boot ROM leaves it in at PC = 0x0100.
+    ///
+    /// Use this when the emulator skips the boot ROM.  The register values
+    /// match what real DMG hardware has when the boot ROM hands control to
+    /// the cartridge, so games see the correct PPU state from the start.
     pub(crate) fn new() -> Self {
         PPU {
             vram: [0; 0x2000],
@@ -241,7 +253,10 @@ impl PPU {
             // would have left behind, otherwise games that wait for VBlank in their
             // init code hang forever (LCDC=0 disables the PPU and VBlank never fires).
             lcd_control: 0x91, // LCD on, BG tile data = 0x8000, BG tile map = 0x9800, BG enabled
-            lcd_status: 0x85,  // LYC=LY flag + mode 1 (VBlank) — matches real HW at PC=0x0100
+            // STAT at PC=0x0100: mode 2 (OAM Scan, bits 0–1 = 10), LYC=LY set (bit 2,
+            // because ly=0 == lyc=0).  Bit 7 is not stored here — it is always 1 on
+            // real hardware and is OR'd in at read time (see read_byte 0xFF41).
+            lcd_status: 0x06,
             scroll_y: 0,
             scroll_x: 0,
             ly: 0,
@@ -254,8 +269,42 @@ impl PPU {
             window_x: 0,
             window_line: 0,
             dot: 0,
-            mode: Mode::OamScan, // (ly=0, dot=0) → Mode 2 per timing table
+            mode: Mode::OamScan, // ly=0, dot=0 → Mode 2 per the PPU timing table
+            mode3_length: DRAWING_DOTS_BASE, // recomputed at every OAM→Drawing transition
             stat_line: false,
+            first_frame: false, // post-boot-ROM start: PPU is already synchronised
+            framebuffer: [0; SCREEN_WIDTH * SCREEN_HEIGHT],
+            oam_cpu_read_pending: Cell::new(false),
+        }
+    }
+
+    /// Create a `PPU` in the power-on cold-start state.
+    ///
+    /// Use this when a boot ROM image is supplied: the boot ROM will
+    /// initialise all PPU registers before the cartridge runs, so we start
+    /// from an all-zeros, LCD-off state.
+    pub(crate) fn cold_start() -> Self {
+        PPU {
+            vram: [0; 0x2000],
+            oam: [0; 0xA0],
+            lcd_control: 0x00, // LCD/PPU disabled
+            lcd_status: 0x00,  // mode 0 (HBlank), no flags
+            scroll_y: 0,
+            scroll_x: 0,
+            ly: 0,
+            lyc: 0,
+            dma: 0x00,
+            bg_palette: 0x00,
+            obj_palette0: 0x00,
+            obj_palette1: 0x00,
+            window_y: 0,
+            window_x: 0,
+            window_line: 0,
+            dot: 0,
+            mode: Mode::HBlank,
+            mode3_length: DRAWING_DOTS_BASE,
+            stat_line: false,
+            first_frame: false,
             framebuffer: [0; SCREEN_WIDTH * SCREEN_HEIGHT],
             oam_cpu_read_pending: Cell::new(false),
         }
@@ -334,8 +383,10 @@ impl PPU {
             self.oam_cpu_read_pending.take(); // clear any stale flag while LCD is off
             self.ly = 0;
             self.dot = 0;
+            self.window_line = 0; // reset so re-enable starts the window from row 0
             self.mode = Mode::HBlank;
             self.lcd_status &= !STAT_MODE_MASK; // mode bits → 0 (HBlank)
+            self.stat_line = false; // reset so re-enable can fire a rising-edge interrupt
             return;
         }
 
@@ -346,6 +397,7 @@ impl PPU {
             self.corrupt_oam(OamCorruptionKind::Read);
         }
 
+        let prev_dot = self.dot;
         self.dot += cycles;
 
         // Each scanline is 456 dots. The longest SM83 instruction is 24
@@ -355,18 +407,42 @@ impl PPU {
             self.ly = (self.ly + 1) % TOTAL_SCANLINES;
             if self.ly == 0 {
                 self.window_line = 0; // new frame — reset the window's internal row counter
+                self.first_frame = false; // LCD sync complete; rendering resumes this frame
             }
+        }
+
+        // At the OAM Scan → Drawing transition, compute and cache the variable
+        // Mode 3 length for this scanline. All sprites are now known (the
+        // 80-dot OAM scan has just completed), so penalties can be determined.
+        //
+        // The check is safe without the scanline-wrap guard: a wrap cannot
+        // carry dot past OAM_SCAN_DOTS in a single step (max instruction = 24
+        // T-cycles; OAM_SCAN_DOTS = 80), so this branch fires at most once
+        // per visible scanline, on the step that crosses dot 80.
+        if self.ly < VISIBLE_SCANLINES && prev_dot < OAM_SCAN_DOTS && self.dot >= OAM_SCAN_DOTS {
+            let sprites = self.scan_oam_for_scanline();
+            self.mode3_length = self.compute_mode3_length(&sprites);
         }
 
         let prev_mode = self.mode;
         self.update_stat_and_interrupts(interrupt_flag);
 
-        // Render the scanline when Mode 3 ends. On hardware, the pixel pipeline
+        // LYC=LY is latched by the PPU at dot 0 of each scanline — the moment
+        // LY increments.  Keeping this separate from the mode-transition checks
+        // above makes the hardware timing explicit: mode interrupts fire at the
+        // transition, LYC fires at dot 0.  On scanline 144 this also preserves
+        // the hardware ordering: VBlank fires first (above), then LYC=144.
+        //
+        // self.dot < cycles holds exactly when the step just crossed dot 0
+        // (the dot counter wrapped): after the wrap, dot = prev + cycles − 456,
+        // which is always < cycles.  Without a wrap, dot = prev + cycles ≥ cycles.
+        if self.dot < cycles {
+            self.update_lyc_compare(interrupt_flag);
+        }
+
+        // Render the scanline when Mode 3 ends. On hardware the pixel pipeline
         // pushes pixels one-by-one throughout Mode 3; here we produce the whole
-        // scanline at once at the Drawing→HBlank boundary. This is accurate for
-        // games that do not scroll mid-scanline or rely on mid-scanline raster
-        // effects (variable Mode 3 length from SCX/sprite/window penalties is
-        // not yet modelled).
+        // scanline at once at the Drawing→HBlank boundary.
         if prev_mode == Mode::Drawing && self.mode == Mode::HBlank {
             self.render_scanline();
         }
@@ -380,6 +456,105 @@ impl PPU {
         (self.lcd_control & LCDC_LCD_ENABLE) != 0
     }
 
+    /// Write to the STAT register (0xFF41) and return whether a spurious STAT
+    /// interrupt should be raised.
+    ///
+    /// ## Why this exists as a separate method
+    ///
+    /// On DMG hardware the STAT interrupt circuit OR's together all enabled
+    /// source signals. When the CPU writes to STAT the data bus briefly drives
+    /// all bits — including the read-only mode and LYC=LY bits — to whatever
+    /// value the CPU is writing. This momentarily asserts every source
+    /// simultaneously, regardless of what is actually enabled. If the STAT
+    /// interrupt line was previously low, the transient high pulse creates a
+    /// rising edge → a spurious STAT interrupt fires.
+    ///
+    /// The MMU calls this method for every CPU write to 0xFF41 and raises
+    /// `IF_STAT` (bit 1) when it returns `true`.
+    pub(crate) fn write_stat(&mut self, value: u8) -> bool {
+        // Apply the register write through the standard path, which preserves
+        // the read-only status bits (mode, LYC=LY flag) in bits 0–2.
+        self.write_byte(0xFF41, value);
+
+        // The spurious interrupt fires when the LCD is on and no source was
+        // already keeping the STAT line high. If the line is already high
+        // there is no rising edge, so no second interrupt should fire.
+        if self.lcd_enabled() && !self.stat_line {
+            // Mark the line high now so the next step() does not see a
+            // second rising edge if a real source also becomes active before
+            // update_stat_and_interrupts() runs.
+            self.stat_line = true;
+            return true;
+        }
+        false
+    }
+
+    // -----------------------------------------------------------------------
+    // Variable Mode 3 length (Phase 2 timing accuracy)
+    // -----------------------------------------------------------------------
+
+    /// Compute the total Mode 3 (Drawing) dot count for this scanline.
+    ///
+    /// Mode 3 starts at dot 80 and runs for `DRAWING_DOTS_BASE` plus three
+    /// hardware-imposed penalties that stall the pixel pipeline:
+    ///
+    ///   1. **SCX fine-scroll** — the pipeline discards the leftmost (SCX % 8)
+    ///      pixels from the first background tile before pushing any pixels out.
+    ///   2. **Sprite fetch** — each sprite on the scanline causes the pipeline
+    ///      to pause while it fetches the sprite's tile row from VRAM.
+    ///   3. **Window activation** — when the window first becomes visible on a
+    ///      scanline, the pipeline abandons its current BG tile and restarts
+    ///      the fetcher for the window tile map.
+    ///
+    /// Mode 0 (HBlank) absorbs the remainder: 456 − 80 − mode3_length.
+    ///
+    /// Called once per visible scanline at the OAM Scan → Drawing transition,
+    /// when all sprites for the line are known.
+    fn compute_mode3_length(&self, sprites: &[Sprite]) -> u16 {
+        DRAWING_DOTS_BASE
+            + self.scx_fine_scroll_penalty()
+            + self.sprite_fetch_penalty(sprites)
+            + self.window_activate_penalty()
+    }
+
+    /// SCX fine-scroll penalty: 0–7 dots.
+    ///
+    /// The background fetcher always reads an aligned 8-pixel chunk first.
+    /// When SCX is not a multiple of 8 the pipeline discards the (SCX % 8)
+    /// leftmost pixels of that first chunk before outputting pixel 0, stalling
+    /// for one dot per discarded pixel.
+    fn scx_fine_scroll_penalty(&self) -> u16 {
+        (self.scroll_x % 8) as u16
+    }
+
+    /// Sprite fetch penalty: 6 dots per sprite on the scanline.
+    ///
+    /// Each time the pixel pipeline's X position reaches a sprite's left edge,
+    /// it pauses to fetch that sprite's tile row from VRAM. The actual stall
+    /// is 6–11 dots depending on alignment; 6 is the minimum and a reasonable
+    /// approximation for the per-sprite cost.
+    fn sprite_fetch_penalty(&self, sprites: &[Sprite]) -> u16 {
+        sprites.len() as u16 * 6
+    }
+
+    /// Window activation penalty: 6 dots when the window is visible this line.
+    ///
+    /// When the pixel pipeline's X position first reaches the window's left
+    /// edge on a scanline where the window is visible, the pipeline discards
+    /// its current BG tile and restarts the fetcher for the window tile map.
+    /// This costs 6 dots (one full fetch cycle).
+    fn window_activate_penalty(&self) -> u16 {
+        let window_enabled = (self.lcd_control & LCDC_WINDOW_ENABLE) != 0;
+        let scanline_in_range = self.ly >= self.window_y;
+        let window_on_screen = (self.window_x as usize).saturating_sub(7) < SCREEN_WIDTH;
+
+        if window_enabled && scanline_in_range && window_on_screen {
+            6
+        } else {
+            0
+        }
+    }
+
     /// Derive the PPU mode from the current scanline and dot position.
     ///
     /// This is the ground truth for mode; `self.mode` is kept in sync with
@@ -389,7 +564,7 @@ impl PPU {
             Mode::VBlank
         } else if self.dot < OAM_SCAN_DOTS {
             Mode::OamScan
-        } else if self.dot < OAM_SCAN_DOTS + DRAWING_DOTS {
+        } else if self.dot < OAM_SCAN_DOTS + self.mode3_length {
             Mode::Drawing
         } else {
             Mode::HBlank
@@ -407,13 +582,10 @@ impl PPU {
         // Bits 0–1: PPU mode.
         self.lcd_status = (self.lcd_status & !STAT_MODE_MASK) | (new_mode as u8);
 
-        // Bit 2: LYC=LY comparison. The hardware compares these registers
-        // continuously; we update once per step (instruction granularity).
-        if self.ly == self.lyc {
-            self.lcd_status |= STAT_LYC_FLAG;
-        } else {
-            self.lcd_status &= !STAT_LYC_FLAG;
-        }
+        // Bit 2: LYC=LY flag — updated at dot 0 by update_lyc_compare, and
+        // kept accurate on LYC register writes by write_byte(0xFF45).
+        // We do not touch it here so its value reflects the last latch point,
+        // not an arbitrary instruction boundary.
 
         self.mode = new_mode;
 
@@ -429,6 +601,36 @@ impl PPU {
         // that is the logical OR of all active and enabled sources.
         // "STAT blocking": consecutive sources that keep the signal high do
         // not retrigger — there is no low-to-high transition to detect.
+        let stat_line = self.stat_line_active();
+        if stat_line && !self.stat_line {
+            *interrupt_flag |= IF_STAT;
+        }
+        self.stat_line = stat_line;
+    }
+
+    /// Latch the LYC=LY comparison at dot 0 of the new scanline and fire the
+    /// STAT interrupt if the result creates a rising edge on the combined signal.
+    ///
+    /// Called once per scanline, immediately after `update_stat_and_interrupts`,
+    /// on the step that crosses dot 0 (when `self.dot < cycles` after the wrap).
+    ///
+    /// Keeping this separate from `update_stat_and_interrupts` documents the
+    /// hardware timing contract: mode-transition interrupts fire at the mode
+    /// boundary; the LYC interrupt fires at dot 0 of the matching scanline.
+    /// On scanline 144 this also preserves hardware ordering: the VBlank
+    /// interrupt fires first (in `update_stat_and_interrupts`), then the
+    /// LYC=144 interrupt fires here.
+    fn update_lyc_compare(&mut self, interrupt_flag: &mut u8) {
+        // Latch the LYC=LY comparison result into STAT bit 2.
+        if self.ly == self.lyc {
+            self.lcd_status |= STAT_LYC_FLAG;
+        } else {
+            self.lcd_status &= !STAT_LYC_FLAG;
+        }
+
+        // Re-evaluate the combined STAT line now that the LYC source may have
+        // changed.  Fire the interrupt on a rising edge, just as the mode-based
+        // sources do in update_stat_and_interrupts.
         let stat_line = self.stat_line_active();
         if stat_line && !self.stat_line {
             *interrupt_flag |= IF_STAT;
@@ -464,6 +666,14 @@ impl PPU {
     ///   `color_ids` — raw color index (0–3) used for sprite priority checks
     ///   `shades`    — final shade value (0–3) copied to the framebuffer
     fn render_scanline(&mut self) {
+        // The first frame after LCD re-enable is blank (white): the DMG LCD
+        // controller spends one full frame synchronising with the panel.
+        // Leave the framebuffer untouched; the frontend will display whatever
+        // was there before — typically the last rendered frame.
+        if self.first_frame {
+            return;
+        }
+
         let mut color_ids = [0u8; SCREEN_WIDTH]; // color indices for priority checks
         let mut shades = [0u8; SCREEN_WIDTH]; // output shades (default: white)
 
@@ -798,7 +1008,10 @@ impl Memory for PPU {
                 _ => self.oam[(address - 0xFE00) as usize],
             },
             0xFF40 => self.lcd_control,
-            0xFF41 => self.lcd_status,
+            // STAT bit 7 always reads as 1 on DMG hardware (the bit is unused
+            // and the pin is pulled high).  The stored value never has bit 7
+            // set; we OR it in here so read-modify-write code works correctly.
+            0xFF41 => self.lcd_status | 0x80,
             0xFF42 => self.scroll_y,
             0xFF43 => self.scroll_x,
             0xFF44 => self.ly,
@@ -829,19 +1042,43 @@ impl Memory for PPU {
                 Mode::Drawing => {}
                 _ => self.oam[(address - 0xFE00) as usize] = value,
             },
-            0xFF40 => self.lcd_control = value,
+            0xFF40 => {
+                let was_enabled = self.lcd_enabled();
+                self.lcd_control = value;
+                // On a 0 → 1 transition of LCDC bit 7 the DMG LCD controller
+                // needs one full frame to sync with the panel before it can
+                // clock out pixels.  Suppress rendering for that frame.
+                if !was_enabled && self.lcd_enabled() {
+                    self.first_frame = true;
+                }
+            }
             0xFF41 => {
                 // Bits 3–6 are writable (interrupt enables). Bits 0–2 are
                 // read-only (PPU mode and LYC=LY flag) — preserve them.
-                // Note: a DMG hardware quirk causes a spurious STAT interrupt
-                // when writing to this register during certain modes. Not yet
-                // modeled.
+                //
+                // CPU writes to STAT are routed through PPU::write_stat() by
+                // the MMU, which also handles the DMG spurious-interrupt quirk.
+                // This arm covers any non-CPU paths (e.g. tests writing directly
+                // to the PPU) and performs the bare register write without the
+                // interrupt side-effect.
                 self.lcd_status = (self.lcd_status & 0b0000_0111) | (value & 0b0111_1000);
             }
             0xFF42 => self.scroll_y = value,
             0xFF43 => self.scroll_x = value,
             0xFF44 => {} // LY is read-only; CPU writes are ignored
-            0xFF45 => self.lyc = value,
+            0xFF45 => {
+                self.lyc = value;
+                // Keep STAT bit 2 (LYC=LY flag) accurate so an immediate CPU
+                // read of STAT returns the correct value.  The LYC STAT
+                // interrupt does not fire here — it fires at dot 0 of the
+                // matching scanline via update_lyc_compare, when the PPU
+                // latches the comparison alongside the LY increment.
+                if self.ly == self.lyc {
+                    self.lcd_status |= STAT_LYC_FLAG;
+                } else {
+                    self.lcd_status &= !STAT_LYC_FLAG;
+                }
+            }
             0xFF46 => self.dma = value,
             0xFF47 => self.bg_palette = value,
             0xFF48 => self.obj_palette0 = value,

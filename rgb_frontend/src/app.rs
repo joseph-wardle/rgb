@@ -34,15 +34,14 @@ use winit::window::{Window, WindowId};
 /// Emulator application state, owned by the winit event loop.
 ///
 /// On native, call [`crate::run`] which creates and drives this internally.
-/// On WASM, `rgb_web` can create an `App` directly if needed.
 pub struct App {
     /// The DMG emulator instance.
     dmg: DMG,
-    /// Audio output backend (cpal on native, Web Audio on WASM).
+    /// Audio output backend (cpal on native).
     audio: Box<dyn AudioSink>,
     /// Palette used to convert shade indices to RGBA.
     palette: Palette,
-    /// Initial window scale factor (e.g. 4 → 640×576).
+    /// Integer scale factor for the initial window size (e.g. 4 → 640×576).
     scale: u32,
     /// Window title.
     title: String,
@@ -50,18 +49,6 @@ pub struct App {
     // Initialised in `resumed` — `None` until the first resume event.
     window: Option<Arc<Window>>,
     pixels: Option<Pixels<'static>>,
-
-    /// On WASM, Pixels is created asynchronously after the window exists.
-    /// `spawn_local` writes the result here; each frame drains it into
-    /// `self.pixels` before rendering.
-    #[cfg(target_arch = "wasm32")]
-    pixels_pending: std::rc::Rc<std::cell::RefCell<Option<Pixels<'static>>>>,
-
-    /// On WASM: DOM id of a pre-existing `<canvas>` to attach to.  When
-    /// `Some`, winit uses that element as the window surface; when `None` it
-    /// appends a new canvas to `document.body`.
-    #[cfg(target_arch = "wasm32")]
-    canvas_id: Option<String>,
 
     /// Frame-rate limiter.
     pacer: FramePacer,
@@ -93,10 +80,6 @@ impl App {
             title: config.title,
             window: None,
             pixels: None,
-            #[cfg(target_arch = "wasm32")]
-            pixels_pending: std::rc::Rc::new(std::cell::RefCell::new(None)),
-            #[cfg(target_arch = "wasm32")]
-            canvas_id: config.canvas_id,
             pacer: FramePacer::new(),
             result: None,
         }
@@ -111,13 +94,8 @@ impl App {
 impl ApplicationHandler for App {
     /// Create the window and initialise the GPU pixel buffer.
     ///
-    /// Deferred to `resumed` because some platforms (Android, Web) do not
-    /// allow surface creation before this event fires.
-    ///
-    /// On native, `Pixels` is created synchronously here.  On WASM, GPU
-    /// surface creation is async — we spawn a microtask that creates `Pixels`
-    /// and stores it in `pixels_pending`; the next `RedrawRequested` callback
-    /// picks it up.
+    /// Deferred to `resumed` because some platforms (Android) do not allow
+    /// surface creation before this event fires.
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if self.window.is_some() {
             return; // already initialised (redundant resume)
@@ -128,34 +106,10 @@ impl ApplicationHandler for App {
             SCREEN_HEIGHT as u32 * self.scale,
         );
 
-        #[allow(unused_mut)]
-        let mut attrs = Window::default_attributes()
+        let attrs = Window::default_attributes()
             .with_title(&self.title)
             .with_inner_size(size)
             .with_min_inner_size(LogicalSize::new(SCREEN_WIDTH as u32, SCREEN_HEIGHT as u32));
-
-        // On WASM, attach winit to a pre-existing <canvas> by id if one was
-        // provided; otherwise append a new canvas to document.body.
-        // Using a pre-placed canvas lets the embedding page (e.g. a portfolio
-        // article) control exactly where the emulator screen appears.
-        #[cfg(target_arch = "wasm32")]
-        {
-            use wasm_bindgen::JsCast;
-            use winit::platform::web::WindowAttributesExtWebSys;
-
-            let canvas = self.canvas_id.as_deref().and_then(|id| {
-                web_sys::window()
-                    .and_then(|w| w.document())
-                    .and_then(|d| d.get_element_by_id(id))
-                    .and_then(|e| e.dyn_into::<web_sys::HtmlCanvasElement>().ok())
-            });
-
-            if canvas.is_some() {
-                attrs = attrs.with_canvas(canvas);
-            } else {
-                attrs = attrs.with_append(true);
-            }
-        }
 
         let window = Arc::new(
             event_loop
@@ -163,35 +117,9 @@ impl ApplicationHandler for App {
                 .expect("failed to create window"),
         );
 
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            // On native, Pixels::new is synchronous and can be called here.
-            let pixels = renderer::create_pixels(Arc::clone(&window))
-                .expect("failed to create pixel buffer");
-            self.pixels = Some(pixels);
-        }
-
-        #[cfg(target_arch = "wasm32")]
-        {
-            // On WASM, Pixels::new_async must be awaited.  We spawn a
-            // microtask that creates Pixels and stashes it in pixels_pending.
-            // The next RedrawRequested callback drains it into self.pixels.
-            //
-            // Surface dimensions are passed explicitly because
-            // window.inner_size() returns 0×0 before the browser lays out
-            // the canvas — using the LogicalSize we requested is safe here.
-            let pending = std::rc::Rc::clone(&self.pixels_pending);
-            let window_clone = Arc::clone(&window);
-            let surf_w = SCREEN_WIDTH as u32 * self.scale;
-            let surf_h = SCREEN_HEIGHT as u32 * self.scale;
-            wasm_bindgen_futures::spawn_local(async move {
-                match renderer::create_pixels_async(window_clone, surf_w, surf_h).await {
-                    Ok(pixels) => *pending.borrow_mut() = Some(pixels),
-                    Err(e) => eprintln!("failed to create pixel buffer: {e}"),
-                }
-            });
-        }
-
+        let pixels =
+            renderer::create_pixels(Arc::clone(&window)).expect("failed to create pixel buffer");
+        self.pixels = Some(pixels);
         self.window = Some(window);
     }
 
@@ -241,45 +169,23 @@ impl ApplicationHandler for App {
 
             // ── Resize ───────────────────────────────────────────────
             WindowEvent::Resized(size) => {
-                if size.width > 0 && size.height > 0
-                    && let Some(ref mut pixels) = self.pixels {
-                        let _ = pixels.resize_surface(size.width, size.height);
-                    }
+                if size.width > 0
+                    && size.height > 0
+                    && let Some(ref mut pixels) = self.pixels
+                {
+                    let _ = pixels.resize_surface(size.width, size.height);
+                }
             }
 
             // ── Render ───────────────────────────────────────────────
-            // This is where the per-frame emulator work happens.  winit
-            // delivers RedrawRequested once per frame in response to the
-            // request_redraw() call in about_to_wait().
             WindowEvent::RedrawRequested => {
-                // On WASM, drain the async-initialised Pixels once it arrives.
-                #[cfg(target_arch = "wasm32")]
-                if self.pixels.is_none() {
-                    if let Some(pixels) = self.pixels_pending.borrow_mut().take() {
-                        self.pixels = Some(pixels);
-                    }
-                }
-
-                // On WASM, requestAnimationFrame fires at the monitor refresh
-                // rate (60/120/144 Hz), which is faster than the Game Boy's
-                // 59.7 Hz.  Skip emulation until a full frame period has
-                // elapsed.  On native is_frame_due() always returns true and
-                // wait() handles the sleep instead.
-                if !self.pacer.is_frame_due() {
-                    return;
-                }
-
-                self.pacer.begin_frame();
-
-                // Run exactly one DMG frame (70,224 T-cycles).
-                self.dmg.step_frame();
-
-                // Push audio samples to the platform backend.
-                let samples = self.dmg.drain_samples();
-                self.audio.push_samples(&samples);
-
-                // Convert shade indices → RGBA and render.
                 if let Some(ref mut pixels) = self.pixels {
+                    self.pacer.begin_frame();
+                    self.dmg.step_frame();
+
+                    let samples = self.dmg.drain_samples();
+                    self.audio.push_samples(&samples);
+
                     renderer::shade_to_rgba(
                         self.dmg.framebuffer(),
                         &self.palette,
@@ -297,8 +203,7 @@ impl ApplicationHandler for App {
     }
 
     /// After all events are processed, pace the frame and request the next
-    /// redraw.  On native this sleeps for the remainder of the frame budget;
-    /// on WASM the sleep is a no-op (winit uses requestAnimationFrame).
+    /// redraw.  On native this sleeps for the remainder of the frame budget.
     fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
         self.pacer.wait();
         if let Some(ref window) = self.window {

@@ -93,8 +93,7 @@ impl Channel2 {
             self.length.value = 64;
         }
         self.freq_timer = (2048 - self.freq) * 4;
-        self.envelope.volume = self.envelope.initial;
-        self.envelope.timer = self.envelope.period;
+        self.envelope.trigger();
 
         // Extra length clock when the frame sequencer's next step won't clock
         // length (next step is odd: 1, 3, 5, 7 — `frame_seq_step` already

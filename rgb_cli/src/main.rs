@@ -92,12 +92,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // ── Persist save data ────────────────────────────────────────────
     if let Some(data) = result.save_data
-        && let Err(e) = fs::write(&save_path, &data) {
-            eprintln!(
-                "warning: could not write save file {}: {e}",
-                save_path.display()
-            );
-        }
+        && let Err(e) = fs::write(&save_path, &data)
+    {
+        eprintln!(
+            "warning: could not write save file {}: {e}",
+            save_path.display()
+        );
+    }
 
     Ok(())
 }
