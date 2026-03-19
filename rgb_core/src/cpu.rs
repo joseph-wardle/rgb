@@ -1975,10 +1975,49 @@ impl CPU {
         }
     }
 
+    /// Check for pending interrupts and dispatch if appropriate.
+    ///
+    /// ## Interrupt dispatch timing (5 M-cycles / 20 T-cycles)
+    ///
+    /// | M-cycle | Operation                                         |
+    /// |---------|---------------------------------------------------|
+    /// | M1      | Internal — disable IME                            |
+    /// | M2      | Internal — stall                                  |
+    /// | M3      | Push PC high byte to `[SP-1]`                     |
+    /// |         | *(vector determined here — see below)*             |
+    /// | M4      | Push PC low byte to `[SP-2]`                      |
+    /// | M5      | Internal — load vector into PC                    |
+    ///
+    /// ## Vector determination between M3 and M4
+    ///
+    /// The interrupt vector is **not** locked in when dispatch begins.
+    /// After the high-byte push (M3), the CPU re-reads IE and IF to
+    /// decide which vector to jump to.  If the M3 push happened to
+    /// write to 0xFFFF (because SP was 0x0000 or 0x0001), IE changes
+    /// mid-dispatch and the final vector may differ from the one that
+    /// originally triggered the interrupt.
+    ///
+    /// Three outcomes are possible at this point:
+    ///
+    /// - **Same interrupt still pending** — the common case; the
+    ///   original interrupt is serviced normally.
+    ///
+    /// - **Different interrupt now highest-priority** — a rarer case
+    ///   where the IE change promotes a different IF bit; that
+    ///   interrupt is serviced instead.
+    ///
+    /// - **No interrupt pending** (`IE & IF == 0`) — the interrupt
+    ///   is effectively cancelled: the CPU jumps to 0x0000 and no
+    ///   IF bit is cleared.  (The mooneye `ie_push` test exercises
+    ///   this exact scenario.)
+    ///
+    /// The IF acknowledgement (clearing the serviced bit) also happens
+    /// at this point, not at dispatch start — so it is the *resolved*
+    /// interrupt that gets acknowledged, not necessarily the original.
     pub(crate) fn service_interrupts(&mut self, mmu: &mut impl MemoryBus) -> Option<u8> {
         let ie = mmu.read_byte(0xFFFF);
-        let mut iflag = mmu.read_byte(0xFF0F);
-        let pending = ie & iflag;
+        let iflag = mmu.read_byte(0xFF0F);
+        let pending = ie & iflag & 0x1F;
 
         if pending == 0 {
             return None;
@@ -1994,39 +2033,47 @@ impl CPU {
         self.ime = false;
         self.ime_scheduled = None;
 
-        for i in 0..5 {
-            let mask = 1 << i;
-            if pending & mask != 0 {
-                // Interrupt dispatch: 20 cycles = 5 M-cycles.
-                //   M1: disable IME, acknowledge interrupt (internal)
-                //   M2: NOP / stall (internal)
-                //   M3: push PCH to [SP-1]
-                //   M4: push PCL to [SP-2]
-                //   M5: load PC with interrupt vector (internal)
-                //
-                // The IF write is an internal bus operation, not a CPU M-cycle.
-                // The push (M3+M4) is handled by self.push which ticks twice.
-                mmu.tick_m_cycle(); // M1: internal
-                mmu.tick_m_cycle(); // M2: internal
-                iflag &= !mask;
-                mmu.write_byte(0xFF0F, iflag); // acknowledge interrupt (no tick: internal)
-                self.push(mmu, self.reg.pc); // M3, M4
-                let vector = match i {
-                    0 => 0x40,
-                    1 => 0x48,
-                    2 => 0x50,
-                    3 => 0x58,
-                    4 => 0x60,
-                    _ => 0x00,
-                };
-                mmu.tick_m_cycle(); // M5: internal (load PC / vector fetch)
-                self.reg.pc = vector;
-                self.log_interrupt_service(vector, i);
-                return Some(20);
-            }
-        }
+        // M1–M2: two internal M-cycles (IME already cleared above).
+        mmu.tick_m_cycle();
+        mmu.tick_m_cycle();
 
-        None
+        // M3: push the high byte of PC onto the stack.
+        //
+        // If SP is 0x0000 or 0x0001 this write lands on 0xFFFF (the IE
+        // register), which is the root cause of the "IE push" behaviour.
+        let pc = self.reg.pc;
+        self.reg.sp = self.reg.sp.wrapping_sub(1);
+        bus_write(mmu, self.reg.sp, (pc >> 8) as u8);
+
+        // — Vector determination —
+        //
+        // Re-read IE and IF *after* the high-byte push, because the push
+        // may have overwritten IE.  The lowest set bit of (IE & IF)
+        // selects both the vector and which IF bit to acknowledge.
+        let ie_now = mmu.read_byte(0xFFFF);
+        let if_now = mmu.read_byte(0xFF0F) & 0x1F;
+        let resolved = ie_now & if_now & 0x1F;
+
+        let vector = if resolved != 0 {
+            let bit = resolved.trailing_zeros() as u8;
+            // Acknowledge the resolved interrupt (not the original).
+            mmu.write_byte(0xFF0F, if_now & !(1 << bit));
+            0x0040 + (bit as u16) * 8
+        } else {
+            // IE & IF is zero — interrupt cancelled.  No IF bit is
+            // cleared and the CPU will jump to 0x0000.
+            0x0000
+        };
+
+        // M4: push the low byte of PC onto the stack.
+        self.reg.sp = self.reg.sp.wrapping_sub(1);
+        bus_write(mmu, self.reg.sp, pc as u8);
+
+        // M5: internal — load the resolved vector into PC.
+        mmu.tick_m_cycle();
+        self.reg.pc = vector;
+        self.log_interrupt_service(vector, resolved.trailing_zeros() as u8);
+        Some(20)
     }
 }
 
