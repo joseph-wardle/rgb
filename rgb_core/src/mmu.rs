@@ -24,7 +24,7 @@ impl Devices {
     fn post_boot(cartridge: Box<dyn Cartridge>) -> Self {
         Self {
             cartridge,
-            apu: APU::new(),
+            apu: APU::post_boot(),
             ppu: PPU::new(),
             joypad: Joypad::new(),
             serial: Serial::new(),
@@ -39,7 +39,7 @@ impl Devices {
     fn cold_start(cartridge: Box<dyn Cartridge>) -> Self {
         Self {
             cartridge,
-            apu: APU::new(),
+            apu: APU::cold_start(),
             ppu: PPU::cold_start(),
             joypad: Joypad::new(),
             serial: Serial::new(),
@@ -240,7 +240,11 @@ impl MMU {
                 //   Back-to-back DMA triggers land here: the first trigger left
                 //   remaining=161 and the second trigger fires at remaining=160,
                 //   both of which are ≥ 160.
-                self.oam_dma_remaining = if self.oam_dma_remaining < 160 { 162 } else { 161 };
+                self.oam_dma_remaining = if self.oam_dma_remaining < 160 {
+                    162
+                } else {
+                    161
+                };
             }
             0xFF40 | 0xFF42..=0xFF45 | 0xFF47..=0xFF4B => {
                 self.devices.ppu.write_byte(address, value)

@@ -31,6 +31,15 @@ pub struct Channel3 {
     pub enabled: bool,
     pub freq_timer: u16, // T-cycle countdown; reloads with (2048 − freq) × 2
     pub phase: u8,       // nibble index 0–31 into wave_ram
+
+    /// DMG wave RAM access window countdown (T-cycles).
+    ///
+    /// On DMG, when the wave channel reads a new sample (freq_timer expires),
+    /// the byte at the current playback position is accessible to the CPU for
+    /// exactly 2 T-cycles.  Outside this window, reads while Ch3 is active
+    /// return 0xFF instead of the sample byte.  Set to 2 when a sample is
+    /// read; decremented each T-cycle.
+    pub wave_access_timer: u8,
 }
 
 impl Channel3 {
@@ -41,7 +50,23 @@ impl Channel3 {
             0xFF1C => self.output_level << 5,   // bits 0–4 and 7 unused (OR mask 0x9F)
             0xFF1D => 0,                        // write-only (OR mask 0xFF by APU)
             0xFF1E => (self.length.enabled as u8) << 6,
-            0xFF30..=0xFF3F => self.wave_ram[(address - 0xFF30) as usize],
+            // DMG wave RAM access window: while Ch3 is playing, CPU reads are
+            // only valid for the 2 T-cycles immediately after the channel reads
+            // a new sample (wave_access_timer > 0).  During that window, any
+            // address returns the byte the channel is currently playing
+            // (wave_ram[phase / 2]).  Outside the window, reads return 0xFF.
+            // When Ch3 is off, normal indexed access applies.
+            0xFF30..=0xFF3F => {
+                if self.enabled {
+                    if self.wave_access_timer > 0 {
+                        self.wave_ram[(self.phase / 2) as usize]
+                    } else {
+                        0xFF
+                    }
+                } else {
+                    self.wave_ram[(address - 0xFF30) as usize]
+                }
+            }
             _ => 0,
         }
     }
@@ -65,13 +90,48 @@ impl Channel3 {
             }
             0xFF1E => {
                 self.freq = (self.freq & 0x0FF) | (((value & 0x07) as u16) << 8);
+                let was_enabled = self.length.enabled;
                 self.length.enabled = value & 0x40 != 0;
+
+                // Extra length clock: enabling the length counter during the
+                // first half of the length period clocks it immediately.
+                if !was_enabled
+                    && self.length.enabled
+                    && frame_seq_step & 1 == 1
+                    && self.length.clock()
+                {
+                    self.enabled = false;
+                }
+
                 if value & 0x80 != 0 {
                     self.trigger(frame_seq_step);
                 }
             }
+            // DMG wave RAM write redirect: while Ch3 is active, the same 2
+            // T-cycle access window that governs reads also governs writes.
+            // Within the window (wave_access_timer > 0), any write address is
+            // redirected to the byte at the current playback position
+            // (wave_ram[phase / 2]).  Outside the window the write is ignored,
+            // mirroring the read behaviour (reads return 0xFF outside the window).
+            // When Ch3 is off, writes go to the normally addressed byte.
             0xFF30..=0xFF3F => {
-                self.wave_ram[(address - 0xFF30) as usize] = value;
+                if self.enabled {
+                    let target = (self.phase / 2) as usize;
+                    eprintln!(
+                        "WW12 phase={} freq_timer={} access={} target_byte={} addr_byte={}",
+                        self.phase,
+                        self.freq_timer,
+                        self.wave_access_timer,
+                        target,
+                        (address - 0xFF30) as usize,
+                    );
+                    if self.wave_access_timer > 0 {
+                        self.wave_ram[target] = value;
+                    }
+                    // Outside the window the write has no effect on wave RAM.
+                } else {
+                    self.wave_ram[(address - 0xFF30) as usize] = value;
+                }
             }
             _ => {}
         }
@@ -109,12 +169,20 @@ impl Channel3 {
     /// Clock the frequency timer by one T-cycle.  Ch3 fires twice as often
     /// as Ch1/Ch2 for the same frequency value, stepping through 32 nibbles.
     pub fn tick_timer(&mut self) {
+        // Count down the wave RAM access window regardless of whether the
+        // channel is enabled — the window closes naturally after 2 T-cycles.
+        if self.wave_access_timer > 0 {
+            self.wave_access_timer -= 1;
+        }
+
         if self.freq_timer > 0 {
             self.freq_timer -= 1;
         }
         if self.freq_timer == 0 {
             self.freq_timer = (2048 - self.freq) * 2;
             self.phase = (self.phase + 1) & 31;
+            // Open the 2-T-cycle access window so the CPU can read this sample.
+            self.wave_access_timer = 2;
         }
     }
 
@@ -131,20 +199,22 @@ impl Channel3 {
 
     fn trigger(&mut self, frame_seq_step: u8) {
         self.enabled = self.dac_on;
-        if self.length.value == 0 {
+        let length_was_zero = self.length.value == 0;
+        if length_was_zero {
             self.length.value = 256;
         }
-        // Note: phase is intentionally NOT reset here.  On real hardware, triggering
-        // Ch3 does not reset the wave position; the channel resumes from wherever it
-        // left off.  Only the frequency timer is reloaded.  The +3 T-cycle startup
-        // delay is a hardware quirk: Ch3 takes 3 extra T-cycles before it begins
+        // Wave position resets to 0 on trigger (Pan Docs: "Position is set to 0
+        // but sample buffer is NOT refilled").  The frequency timer reloads with
+        // a +6 T-cycle startup delay: Ch3 takes 6 extra T-cycles before it begins
         // reading samples after a trigger.
-        self.freq_timer = (2048 - self.freq) * 2 + 3;
+        self.phase = 0;
+        self.freq_timer = (2048 - self.freq) * 2 + 6;
 
-        // Extra length clock when the frame sequencer's next step won't clock
-        // length (next step is odd: 1, 3, 5, 7 — `frame_seq_step` already
-        // points at the next step because it was incremented after the last tick).
-        if self.length.enabled && frame_seq_step & 1 == 1 && self.length.clock() {
+        // Extra length clock: when trigger reloads the length counter from zero
+        // AND the frame sequencer's next step won't clock length (next step is
+        // odd), the freshly-reloaded counter is immediately decremented once.
+        if length_was_zero && self.length.enabled && frame_seq_step & 1 == 1 && self.length.clock()
+        {
             self.enabled = false;
         }
     }

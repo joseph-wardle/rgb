@@ -67,7 +67,19 @@ impl Channel4 {
                 self.clock_div = value & 0x07;
             }
             0xFF23 => {
+                let was_enabled = self.length.enabled;
                 self.length.enabled = value & 0x40 != 0;
+
+                // Extra length clock: enabling the length counter during the
+                // first half of the length period clocks it immediately.
+                if !was_enabled
+                    && self.length.enabled
+                    && frame_seq_step & 1 == 1
+                    && self.length.clock()
+                {
+                    self.enabled = false;
+                }
+
                 if value & 0x80 != 0 {
                     self.trigger(frame_seq_step);
                 }
@@ -103,17 +115,19 @@ impl Channel4 {
 
     fn trigger(&mut self, frame_seq_step: u8) {
         self.enabled = self.dac_on;
-        if self.length.value == 0 {
+        let length_was_zero = self.length.value == 0;
+        if length_was_zero {
             self.length.value = 64;
         }
         self.envelope.trigger();
         self.lfsr = 0x7FFF; // all bits set
         self.freq_timer = self.period_t_cycles();
 
-        // Extra length clock when the frame sequencer's next step won't clock
-        // length (next step is odd: 1, 3, 5, 7 — `frame_seq_step` already
-        // points at the next step because it was incremented after the last tick).
-        if self.length.enabled && frame_seq_step & 1 == 1 && self.length.clock() {
+        // Extra length clock: when trigger reloads the length counter from zero
+        // AND the frame sequencer's next step won't clock length (next step is
+        // odd), the freshly-reloaded counter is immediately decremented once.
+        if length_was_zero && self.length.enabled && frame_seq_step & 1 == 1 && self.length.clock()
+        {
             self.enabled = false;
         }
     }

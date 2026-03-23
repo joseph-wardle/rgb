@@ -106,7 +106,22 @@ impl Channel1 {
             }
             0xFF14 => {
                 self.freq = (self.freq & 0x0FF) | (((value & 0x07) as u16) << 8);
+                let was_enabled = self.length.enabled;
                 self.length.enabled = value & 0x40 != 0;
+
+                // Extra length clock: enabling the length counter during the
+                // first half of the length period (frame-sequencer step is odd,
+                // meaning the next length clock hasn't fired yet) immediately
+                // clocks the counter once.  If this brings it to zero, the
+                // channel is silenced.
+                if !was_enabled
+                    && self.length.enabled
+                    && frame_seq_step & 1 == 1
+                    && self.length.clock()
+                {
+                    self.enabled = false;
+                }
+
                 if value & 0x80 != 0 {
                     self.trigger(frame_seq_step);
                 }
@@ -117,7 +132,8 @@ impl Channel1 {
 
     fn trigger(&mut self, frame_seq_step: u8) {
         self.enabled = self.dac_on;
-        if self.length.value == 0 {
+        let length_was_zero = self.length.value == 0;
+        if length_was_zero {
             self.length.value = 64;
         }
         self.freq_timer = (2048 - self.freq) * 4;
@@ -133,14 +149,24 @@ impl Channel1 {
 
         // Non-zero shift performs an immediate overflow check on trigger
         // (but does not update the frequency — that waits for the first sweep clock).
-        if self.sweep.shift != 0 && self.calc_sweep_freq().is_none() {
-            self.enabled = false;
+        if self.sweep.shift != 0 {
+            if self.calc_sweep_freq().is_none() {
+                self.enabled = false;
+            }
+            // If the overflow check ran in negate mode, record that fact.
+            // Clearing the negate bit later will disable the channel (anti-glitch).
+            if self.sweep.negate {
+                self.used_negate_since_trigger = true;
+            }
         }
 
-        // Extra length clock when the frame sequencer's next step won't clock
-        // length (next step is odd: 1, 3, 5, 7 — `frame_seq_step` already
-        // points at the next step because it was incremented after the last tick).
-        if self.length.enabled && frame_seq_step & 1 == 1 && self.length.clock() {
+        // Extra length clock: when trigger reloads the length counter from zero
+        // AND the frame sequencer's next step won't clock length (next step is
+        // odd), the freshly-reloaded counter is immediately decremented once.
+        // This only applies when the counter was actually reloaded by the trigger
+        // — if it was already non-zero, no extra clock occurs.
+        if length_was_zero && self.length.enabled && frame_seq_step & 1 == 1 && self.length.clock()
+        {
             self.enabled = false;
         }
     }

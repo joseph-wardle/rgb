@@ -146,7 +146,24 @@ pub(crate) struct APU {
 }
 
 impl APU {
-    pub(crate) fn new() -> Self {
+    /// Create an APU in the state the boot ROM leaves it at PC = 0x0100.
+    ///
+    /// The frame sequencer has been clocked by falling edges on system counter
+    /// bit 12 throughout the boot ROM's execution.  From counter 0 to 0xABD0,
+    /// bit 12 falls at 0x2000, 0x4000, 0x6000, 0x8000, and 0xA000 — five edges,
+    /// so `frame_seq_step` starts at 5.
+    pub(crate) fn post_boot() -> Self {
+        Self {
+            frame_seq_step: 5,
+            ..Self::cold_start()
+        }
+    }
+
+    /// Create an APU in the power-on cold-start state.
+    ///
+    /// Use when a boot ROM image is supplied: the system counter starts at 0
+    /// and the frame sequencer has not been clocked yet.
+    pub(crate) fn cold_start() -> Self {
         Self {
             ch1: Channel1::default(),
             ch2: Channel2::default(),
@@ -172,9 +189,6 @@ impl APU {
     /// sequencer fires at 512 Hz via falling-edge detection on counter bit 12.
     /// Audio samples are pushed at roughly 44,100 Hz.
     pub(crate) fn step(&mut self, cycles: u16, prev_counter: u16) {
-        if !self.on {
-            return;
-        }
         let mut counter = prev_counter;
         // Process one machine cycle (4 T-cycles) at a time so the frame
         // sequencer edge can be detected at M-cycle granularity.
@@ -183,17 +197,22 @@ impl APU {
 
             // Frame sequencer: 512 Hz clock from system counter bit 12.
             // One tick fires on each falling edge (bit transitions 1 → 0).
+            // The frame sequencer runs even when the APU is powered off —
+            // the step counter keeps advancing so that length counters,
+            // which survive power-off on DMG, are clocked at the right rate.
             if counter & FRAME_SEQ_BIT != 0 && next_counter & FRAME_SEQ_BIT == 0 {
                 self.clock_frame_sequencer();
             }
 
             counter = next_counter;
 
-            // Clock channel timers and sample output four times (one per T-cycle).
-            self.tick_t();
-            self.tick_t();
-            self.tick_t();
-            self.tick_t();
+            // Channel timers and sample output only run while the APU is on.
+            if self.on {
+                self.tick_t();
+                self.tick_t();
+                self.tick_t();
+                self.tick_t();
+            }
         }
     }
 
@@ -204,7 +223,9 @@ impl APU {
     /// sequencer fires immediately — exactly as it would from a natural
     /// falling edge during [`step`].
     pub(crate) fn notify_div_reset(&mut self, old_counter: u16) {
-        if self.on && old_counter & FRAME_SEQ_BIT != 0 {
+        // The frame sequencer runs regardless of APU power state — a DIV
+        // reset always advances it if bit 12 was set.
+        if old_counter & FRAME_SEQ_BIT != 0 {
             self.clock_frame_sequencer();
         }
     }
@@ -242,17 +263,24 @@ impl APU {
     // -----------------------------------------------------------------------
 
     fn clock_frame_sequencer(&mut self) {
-        // Length counters clock at 256 Hz: steps 0, 2, 4, 6.
-        if self.frame_seq_step & 1 == 0 {
-            self.clock_length_counters();
-        }
-        // Frequency sweep clocks at 128 Hz: steps 2 and 6.
-        if self.frame_seq_step == 2 || self.frame_seq_step == 6 {
-            self.ch1.clock_sweep();
-        }
-        // Volume envelopes clock at 64 Hz: step 7 only.
-        if self.frame_seq_step == 7 {
-            self.clock_volume_envelopes();
+        // Channel units only tick while the APU is powered on.  On DMG,
+        // length counter VALUES survive power-off (they aren't reset) but
+        // the counters themselves are not clocked while off.  The step
+        // counter always advances, keeping the frame sequencer phase
+        // correct across power cycles.
+        if self.on {
+            // Length counters clock at 256 Hz: steps 0, 2, 4, 6.
+            if self.frame_seq_step & 1 == 0 {
+                self.clock_length_counters();
+            }
+            // Frequency sweep clocks at 128 Hz: steps 2 and 6.
+            if self.frame_seq_step == 2 || self.frame_seq_step == 6 {
+                self.ch1.clock_sweep();
+            }
+            // Volume envelopes clock at 64 Hz: step 7 only.
+            if self.frame_seq_step == 7 {
+                self.clock_volume_envelopes();
+            }
         }
         self.frame_seq_step = (self.frame_seq_step + 1) & 7;
     }
@@ -384,9 +412,13 @@ impl APU {
 
     /// Clear all channel and control registers.  Called when NR52 bit 7 → 0.
     ///
-    /// On DMG, length counters survive APU power-off — only control, frequency,
-    /// and envelope registers are cleared.  This allows games to pre-load length
-    /// values before powering the APU on.
+    /// On DMG, two things survive APU power-off:
+    ///
+    /// - **Length counters** — games can pre-load length values before powering
+    ///   the APU on, and the counters keep ticking via the frame sequencer even
+    ///   while the APU is off.
+    /// - **Wave RAM** — the 16-byte wave table at 0xFF30–0xFF3F is separate
+    ///   from the channel control registers and is not cleared.
     fn power_off(&mut self) {
         let lengths = [
             self.ch1.length.value,
@@ -394,6 +426,7 @@ impl APU {
             self.ch3.length.value,
             self.ch4.length.value,
         ];
+        let wave_ram = self.ch3.wave_ram;
         self.ch1 = Channel1::default();
         self.ch2 = Channel2::default();
         self.ch3 = Channel3::default();
@@ -402,6 +435,7 @@ impl APU {
         self.ch2.length.value = lengths[1];
         self.ch3.length.value = lengths[2];
         self.ch4.length.value = lengths[3];
+        self.ch3.wave_ram = wave_ram;
         self.nr50 = 0;
         self.nr51 = 0;
     }
@@ -431,10 +465,10 @@ impl Memory for APU {
                 (self.on as u8) << 7 | ch_bits | 0x70 // 0x70 = OR mask for NR52
             }
 
-            // All other registers read as 0xFF while the APU is off.
-            _ if !self.on => 0xFF,
-
-            // Channel and control registers — OR mask applied before returning.
+            // On DMG, channel and control registers are readable even while the
+            // APU is off.  (CGB would return 0xFF here — not emulated.)
+            //
+            // OR mask applied before returning.
             0xFF10..=0xFF14 => self.ch1.read(address) | Self::or_mask(address),
             0xFF15..=0xFF19 => self.ch2.read(address) | Self::or_mask(address),
             0xFF1A..=0xFF1E => self.ch3.read(address) | Self::or_mask(address),
@@ -460,11 +494,28 @@ impl Memory for APU {
             if was_on && !self.on {
                 self.power_off();
             }
+            // Powering the APU on resets the frame sequencer step counter.
+            // The next DIV-APU falling edge will fire step 0, so the first
+            // length clock after power-on depends on how soon that edge arrives.
+            if !was_on && self.on {
+                self.frame_seq_step = 0;
+            }
             return;
         }
 
-        // All other APU registers are gated behind the master power switch.
+        // All other APU registers are gated behind the master power switch,
+        // except on DMG where length-load registers (NRx1) remain writable.
+        // This allows games to pre-load length counters before powering the
+        // APU on.  Only the length field matters — duty and other bits in the
+        // same register are ignored while the APU is off.
         if !self.on {
+            match address {
+                0xFF11 => self.ch1.length.value = 64 - (value & 0x3F) as u16,
+                0xFF16 => self.ch2.length.value = 64 - (value & 0x3F) as u16,
+                0xFF1B => self.ch3.length.value = 256 - value as u16,
+                0xFF20 => self.ch4.length.value = 64 - (value & 0x3F) as u16,
+                _ => {}
+            }
             return;
         }
 
