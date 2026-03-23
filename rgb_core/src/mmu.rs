@@ -99,14 +99,16 @@ pub(crate) struct MMU {
     // oam_dma_remaining counts the cycles left in the current transfer:
     //   162      = freshly triggered, next tick enters startup delay
     //   161      = startup delay (OAM still accessible this cycle)
-    //   160      = locked, no copy yet (first locked cycle)
-    //   159..=1  = transferring byte (159 − remaining + 1)
+    //   160      = first locked cycle (no bytes copied yet)
+    //   159..=1  = actively copying byte (byte index = 159 − remaining)
     //   0        = idle, no transfer in progress
     //
-    // A fresh trigger from idle (remaining=0) sets remaining=162, giving one
-    // accessible cycle at 161 before lockout begins at 160.  A restart while
-    // a transfer is already active (remaining>0) sets remaining=161, skipping
-    // the accessible cycle — the OAM bus is already locked.
+    // Two distinct restart cases (see the 0xFF46 write handler below):
+    //   Restart during active copy (1..=159) or from idle (0): set to 162,
+    //     giving one accessible cycle at remaining=161 before lockout.
+    //   Restart during startup phase (160..=161): set to 161, which ticks
+    //     straight to 160 — no new accessible cycle.  Back-to-back DMA
+    //     triggers land here because the first trigger left remaining=161.
     oam_dma_remaining: u8,
     oam_dma_source: u16, // base address latched from the value written to 0xFF46
 }
@@ -230,16 +232,15 @@ impl MMU {
                 // so it can be read back via 0xFF46.
                 self.devices.ppu.write_byte(0xFF46, value);
                 self.oam_dma_source = (value as u16) << 8;
-                // Fresh start from idle: remaining=162 → tick→161 (OAM accessible) →
+                // Idle (0) or active copy (1..=159): fresh/restart start.
+                //   remaining=162 → tick→161 (OAM accessible for one cycle) →
                 //   tick→160 (locked, no copy) → tick→159 (copy byte 0) → … → tick→0.
-                // Restart during active transfer: remaining=161 → tick→160 (locked
-                //   immediately, no accessible cycle).  Back-to-back DMA triggers
-                //   hit this path because the first trigger has already set remaining>0.
-                self.oam_dma_remaining = if self.oam_dma_remaining == 0 {
-                    162
-                } else {
-                    161
-                };
+                // Startup phase (160..=161): restart without a new accessible cycle.
+                //   remaining=161 → tick→160 (locked immediately).
+                //   Back-to-back DMA triggers land here: the first trigger left
+                //   remaining=161 and the second trigger fires at remaining=160,
+                //   both of which are ≥ 160.
+                self.oam_dma_remaining = if self.oam_dma_remaining < 160 { 162 } else { 161 };
             }
             0xFF40 | 0xFF42..=0xFF45 | 0xFF47..=0xFF4B => {
                 self.devices.ppu.write_byte(address, value)
