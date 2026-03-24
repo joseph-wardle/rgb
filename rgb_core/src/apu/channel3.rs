@@ -116,17 +116,8 @@ impl Channel3 {
             // When Ch3 is off, writes go to the normally addressed byte.
             0xFF30..=0xFF3F => {
                 if self.enabled {
-                    let target = (self.phase / 2) as usize;
-                    eprintln!(
-                        "WW12 phase={} freq_timer={} access={} target_byte={} addr_byte={}",
-                        self.phase,
-                        self.freq_timer,
-                        self.wave_access_timer,
-                        target,
-                        (address - 0xFF30) as usize,
-                    );
                     if self.wave_access_timer > 0 {
-                        self.wave_ram[target] = value;
+                        self.wave_ram[(self.phase / 2) as usize] = value;
                     }
                     // Outside the window the write has no effect on wave RAM.
                 } else {
@@ -140,30 +131,67 @@ impl Channel3 {
     /// Apply DMG-specific wave RAM corruption that occurs when Ch3 is triggered
     /// while it is actively reading samples.  CGB does not exhibit this behaviour.
     ///
-    /// On DMG, if Ch3 is currently enabled at the moment of a trigger write, the
-    /// byte being read from wave RAM is "accidentally" re-latched, overwriting the
-    /// first bytes with data from the current wave position:
+    /// On DMG, the corruption fires when the wave channel happens to be reading
+    /// a sample at the same instant as the trigger write.  Because the CPU's bus
+    /// write lands 2 T-cycles before the next `tick_m_cycle` batch, we project
+    /// the timer state 2 T-cycles forward to see whether a sample read would
+    /// coincide with the trigger.
     ///
-    /// - If the wave position is in the **first 4 bytes** (nibble positions 0–7),
-    ///   only the byte currently being read is copied to position 0.
-    /// - Otherwise, all 4 bytes of the **aligned 4-byte block** containing the
-    ///   current position are copied to bytes 0–3.
+    /// When it does, the byte at the **projected** wave position is re-latched
+    /// into the first bytes of wave RAM:
+    ///
+    /// - Position in the **first 4 bytes** (nibble indices 0–7): the single byte
+    ///   at that position is copied to byte 0.
+    /// - Position beyond byte 3: all 4 bytes of the aligned 4-byte block
+    ///   containing the position are copied to bytes 0–3.
     ///
     /// The APU must call this *before* routing the trigger write to `write()`.
     pub fn apply_dmg_trigger_corruption(&mut self) {
         if !self.enabled {
             return;
         }
-        let byte_pos = (self.phase / 2) as usize;
+
+        // Project the timer 2 T-cycles ahead to find the wave position at the
+        // point where the channel would actually read its next sample.
+        let (projected_phase, reading_sample) = self.project_timer(2);
+        if !reading_sample {
+            return;
+        }
+
+        let byte_pos = (projected_phase / 2) as usize;
         if byte_pos < 4 {
-            // The single byte being read is re-latched into position 0.
             self.wave_ram[0] = self.wave_ram[byte_pos];
         } else {
-            // The entire aligned 4-byte block containing the current position
-            // is copied over bytes 0–3.
             let block_start = byte_pos & !3;
             self.wave_ram.copy_within(block_start..block_start + 4, 0);
         }
+    }
+
+    /// Simulate the frequency timer forward by `ticks` T-cycles without
+    /// modifying actual channel state.  Returns the projected `(phase,
+    /// reading_sample)` — where `reading_sample` is true when the access
+    /// window would be open (a sample read occurred within the projection).
+    fn project_timer(&self, ticks: u32) -> (u8, bool) {
+        let period = (2048 - self.freq) * 2;
+        let mut ft = self.freq_timer;
+        let mut phase = self.phase;
+        let mut access = self.wave_access_timer;
+
+        for _ in 0..ticks {
+            if access > 0 {
+                access -= 1;
+            }
+            if ft > 0 {
+                ft -= 1;
+            }
+            if ft == 0 {
+                ft = period;
+                phase = (phase + 1) & 31;
+                access = 2;
+            }
+        }
+
+        (phase, access > 0)
     }
 
     /// Clock the frequency timer by one T-cycle.  Ch3 fires twice as often

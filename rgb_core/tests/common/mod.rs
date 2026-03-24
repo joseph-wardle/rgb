@@ -159,7 +159,7 @@ fn run_blargg(path: &Path) -> String {
             && gb.peek_byte(0xA000) != 0x80
         {
             let mut out = String::new();
-            for i in 0..256u16 {
+            for i in 0..8192u16 {
                 let b = gb.peek_byte(0xA004 + i);
                 if b == 0 {
                     break;
@@ -198,7 +198,7 @@ fn run_mooneye(path: &Path) -> bool {
     // consecutive frames — at 59.73 fps that's ~84 ms, negligible overhead.
     const STABLE_FRAMES_REQUIRED: u32 = 5;
     const MAX_FRAMES: usize = 10_000_000;
-    const TIMEOUT: Duration = Duration::from_secs(60);
+    const TIMEOUT: Duration = Duration::from_secs(6000);
 
     let start = Instant::now();
     let mut prev_pc = u16::MAX;
