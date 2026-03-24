@@ -244,11 +244,19 @@ fn run_mooneye(path: &Path) -> bool {
                 let got = gb.peek_byte(0xFF82);
                 let reg = gb.peek_byte(0xFF83);
                 let mask = gb.peek_byte(0xFF84);
+                // Dump HRAM 0xFF80..0xFFA0 for test-specific diagnostics.
+                let mut hram = String::new();
+                for i in 0x80u16..0xA0 {
+                    hram.push_str(&format!("{:02X} ", gb.peek_byte(0xFF00 + i)));
+                }
                 eprintln!(
                     "MOONEYE FAIL {}: test_addr=0x{addr:04X} reg=0x{reg:02X} \
-                     mask=0x{mask:02X} got=0x{got:02X} regs=[{}]",
+                     mask=0x{mask:02X} got=0x{got:02X} regs=[{}]\n  \
+                     HRAM[FF80..FFA0]: {}\n  serial: {}",
                     path.display(),
-                    gb.mooneye_regs_debug()
+                    gb.mooneye_regs_debug(),
+                    hram.trim(),
+                    gb.serial_output().replace('\n', " | ")
                 );
             }
             return pass;

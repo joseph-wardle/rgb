@@ -64,11 +64,18 @@ const TOTAL_SCANLINES: u8 = 154;
 /// visible scanline to build the list of sprites that appear on this line.
 const OAM_SCAN_DOTS: u16 = 80;
 
-/// Mode 3 (Drawing): the pixel pipeline runs for *at least* 172 dots.
-/// The actual duration is longer on scanlines with SCX fine-scroll, sprites,
-/// or window activation — see [`PPU::compute_mode3_length`].
+/// Mode 3 (Drawing): the pixel pipeline runs for *at least* 172 dots
+/// including a base cost of 171 plus internal overhead.  The duration
+/// grows with SCX fine-scroll, sprites, and window activation — see
+/// [`PPU::compute_mode3_length`].
 /// Mode 0 (HBlank) absorbs the difference: 456 − 80 − mode3_length.
 const DRAWING_DOTS_BASE: u16 = 172;
+
+/// LY increments 4 dots before the scanline boundary on DMG hardware.
+/// The CPU reads the updated LY during dots 452–455, even though the
+/// dot counter does not wrap until dot 456.  The LYC flag is also
+/// re-latched at this point.
+const LY_INCREMENT_DOT: u16 = DOTS_PER_SCANLINE - 4; // 452
 
 // ---------------------------------------------------------------------------
 // Register bit masks — named for their register and function
@@ -217,12 +224,6 @@ pub(crate) struct PPU {
     // when LY wraps from 153 back to 0 (the start of the second frame).
     first_frame: bool,
 
-    // LCD enable startup delay (T-cycles remaining).
-    //
-    // When the LCD is turned on, the PPU idles for a brief period before
-    // entering Mode 2 on scanline 0.  During this delay the PPU reports
-    // Mode 0 in STAT and does not advance the dot counter.
-    lcd_enable_delay: u8,
 
     // Output framebuffer: one byte per pixel, value 0–3 (DMG shade index).
     // 0 = white, 1 = light gray, 2 = dark gray, 3 = black.
@@ -280,7 +281,6 @@ impl PPU {
             mode3_length: DRAWING_DOTS_BASE, // recomputed at every OAM→Drawing transition
             stat_line: false,
             first_frame: false, // post-boot-ROM start: PPU is already synchronised
-            lcd_enable_delay: 0,
             framebuffer: [0; SCREEN_WIDTH * SCREEN_HEIGHT],
             oam_cpu_read_pending: Cell::new(false),
         }
@@ -313,7 +313,6 @@ impl PPU {
             mode3_length: DRAWING_DOTS_BASE,
             stat_line: false,
             first_frame: false,
-            lcd_enable_delay: 0,
             framebuffer: [0; SCREEN_WIDTH * SCREEN_HEIGHT],
             oam_cpu_read_pending: Cell::new(false),
         }
@@ -400,7 +399,6 @@ impl PPU {
             self.window_line = 0;
             self.mode = Mode::HBlank;
             self.lcd_status &= !STAT_MODE_MASK;
-            self.lcd_enable_delay = 0;
             return;
         }
 
@@ -427,38 +425,33 @@ impl PPU {
     ///   5. Updates the mode and evaluates the STAT interrupt signal.
     ///   6. Triggers batch scanline rendering at the Drawing → HBlank boundary.
     fn advance_one_dot(&mut self, interrupt_flag: &mut u8) {
-        // LCD startup delay: after re-enable the PPU remains in Mode 0 while
-        // the dot counter advances.  On real DMG hardware this HBlank period
-        // lasts ~76 dots before the first OAM scan begins.  The delay dots
-        // count toward the first scanline's 456-dot total.
-        if self.lcd_enable_delay > 0 {
-            self.lcd_enable_delay -= 1;
-            self.dot += 1;
-            return;
-        }
-
         // The PPU processes the *current* dot first, then advances the counter.
         // This ensures dot 0 of each scanline is evaluated — important for
         // LYC latching, mode transitions, and STAT edge detection.
 
         // --- 1. LYC=LY latch ---
         //
-        // LYC comparison is latched at the start of each scanline, before
-        // the mode transition.  This way the STAT signal evaluation in
-        // step 3 sees the new LYC flag alongside the new mode — both
-        // change at dot 0 and are visible to the CPU simultaneously.
+        // The LYC comparison is re-evaluated whenever visible_ly() changes:
         //
-        // On line 153, visible_ly() changes from 153 to 0 at dot 4 (the
-        // line-153 LY=0 glitch), so we re-latch the comparison there too.
+        //   dot 0   — start of each scanline (LY was incremented at wrap)
+        //   dot 4   — line 153 only (LY=0 glitch kicks in)
+        //   dot 452 — handled in step 5 (post-advance) so the CPU sees
+        //             the updated flag before the next tick
+        //
+        // Latching before the mode/STAT evaluation in step 3 ensures the
+        // STAT signal sees the fresh LYC flag alongside the current mode.
         if self.dot == 0 || (self.ly == 153 && self.dot == 4) {
             self.latch_lyc_flag();
         }
 
         // --- 2. Cache Mode 3 length at the OAM Scan → Drawing transition ---
         //
-        // At dot 80 the OAM scan is complete and all sprites for this
-        // scanline are known, so we can compute the variable Mode 3 duration.
-        if self.ly < VISIBLE_SCANLINES && self.dot == OAM_SCAN_DOTS {
+        // At the mode3 start dot the OAM scan is complete and all sprites
+        // for this scanline are known, so we can compute the variable Mode 3
+        // duration.  On the first line after LCD re-enable, Mode 3 starts
+        // 2 dots early (dot 78 instead of 80) because line 0 skips OAM scan.
+        let m3_start = self.mode3_start_dot();
+        if self.ly < VISIBLE_SCANLINES && self.dot == m3_start {
             let sprites = self.scan_oam_for_scanline();
             self.mode3_length = self.compute_mode3_length(&sprites);
         }
@@ -488,6 +481,14 @@ impl PPU {
                 self.first_frame = false;
             }
         }
+
+        // LYC re-latch at the early-LY-increment point.  visible_ly()
+        // starts returning the *next* line's LY at dot 452, so we must
+        // update the LYC flag here (after the dot advance) so the CPU
+        // sees the correct flag between ticks.
+        if self.dot == LY_INCREMENT_DOT {
+            self.latch_lyc_flag();
+        }
     }
 
     // -----------------------------------------------------------------------
@@ -500,13 +501,22 @@ impl PPU {
 
     /// The LY value visible to the CPU and used for LYC comparison.
     ///
-    /// On line 153 (the last VBlank line), DMG hardware glitches LY to 0
-    /// after approximately 4 dots.  The internal scanline counter stays at
-    /// 153 for the full 456 dots to keep mode calculations correct, but
-    /// CPU reads of 0xFF44 and LYC=LY matching use this early-reset value.
+    /// Two DMG quirks modify LY before the CPU sees it:
+    ///
+    /// 1. **Early LY increment**: LY updates 4 dots before the scanline
+    ///    boundary.  During dots 452–455 of each scanline, the CPU reads
+    ///    the *next* line's LY even though the dot counter has not wrapped.
+    ///
+    /// 2. **Line 153 LY=0 glitch**: on the last VBlank line, LY reads as
+    ///    0 after approximately 4 dots.  The internal counter stays at 153
+    ///    for the full 456 dots to keep mode calculations correct.
+    ///
+    /// Both rules give the same result (0) at dot ≥ 4 of line 153.
     fn visible_ly(&self) -> u8 {
         if self.ly == 153 && self.dot >= 4 {
             0
+        } else if self.dot >= LY_INCREMENT_DOT {
+            (self.ly + 1) % TOTAL_SCANLINES
         } else {
             self.ly
         }
@@ -534,10 +544,6 @@ impl PPU {
             self.lcd_status &= !STAT_MODE_MASK;
             self.window_line = 0;
             self.first_frame = true;
-            // ~76 dots of Mode 0 before the first Mode 2.  The dot
-            // counter advances during this period so the first
-            // scanline is still 456 dots total.
-            self.lcd_enable_delay = 76;
 
             // Re-latch LYC=LY now that the comparator is active again.
             // LY is 0 after re-enable, so the flag reflects LYC == 0.
@@ -669,14 +675,21 @@ impl PPU {
         (self.scroll_x % 8) as u16
     }
 
-    /// Sprite fetch penalty: 6 dots per sprite on the scanline.
+    /// Sprite fetch penalty: 6–11 dots per sprite depending on alignment.
     ///
-    /// Each time the pixel pipeline's X position reaches a sprite's left edge,
-    /// it pauses to fetch that sprite's tile row from VRAM. The actual stall
-    /// is 6–11 dots depending on alignment; 6 is the minimum and a reasonable
-    /// approximation for the per-sprite cost.
+    /// When the pixel pipeline reaches a sprite's left edge it pauses to
+    /// fetch the sprite's tile row.  The stall length depends on how the
+    /// sprite's X position aligns with the background scroll: a perfectly
+    /// aligned sprite costs 6 dots, while the worst case costs 11.
+    ///
+    /// Formula (matches SameBoy / Gambatte):
+    ///   penalty = 11 − min(5, (oam_x + SCX) % 8)
     fn sprite_fetch_penalty(&self, sprites: &[Sprite]) -> u16 {
-        sprites.len() as u16 * 6
+        let scx = self.scroll_x;
+        sprites
+            .iter()
+            .map(|s| 11 - std::cmp::min(5, (s.x.wrapping_add(scx) % 8) as u16))
+            .sum()
     }
 
     /// Window activation penalty: 6 dots when the window is visible this line.
@@ -697,16 +710,38 @@ impl PPU {
         }
     }
 
+    /// The dot at which Mode 3 (Drawing) begins on the current scanline.
+    ///
+    /// Normally 80 (after the 80-dot OAM scan).  On the first scanline after
+    /// LCD re-enable, the PPU is "late by 2 T-cycles" and skips OAM scan
+    /// entirely, so Mode 3 begins 2 dots early at dot 78.  The preceding
+    /// dots report as Mode 0 (HBlank) instead of Mode 2 (OAM Scan).
+    fn mode3_start_dot(&self) -> u16 {
+        if self.first_frame && self.ly == 0 {
+            OAM_SCAN_DOTS - 2
+        } else {
+            OAM_SCAN_DOTS
+        }
+    }
+
     /// Derive the PPU mode from the current scanline and dot position.
     ///
     /// This is the ground truth for mode; `self.mode` is kept in sync with
     /// it by `update_stat_and_interrupts` after every dot advance.
     fn current_mode(&self) -> Mode {
+        let m3_start = self.mode3_start_dot();
         if self.ly >= VISIBLE_SCANLINES {
             Mode::VBlank
-        } else if self.dot < OAM_SCAN_DOTS {
-            Mode::OamScan
-        } else if self.dot < OAM_SCAN_DOTS + self.mode3_length {
+        } else if self.dot < m3_start {
+            // On the first scanline after LCD re-enable, the PPU reports
+            // Mode 0 (HBlank) instead of Mode 2 (OAM Scan) because the
+            // scan is skipped.
+            if self.first_frame && self.ly == 0 {
+                Mode::HBlank
+            } else {
+                Mode::OamScan
+            }
+        } else if self.dot < m3_start + self.mode3_length {
             Mode::Drawing
         } else {
             Mode::HBlank
@@ -766,11 +801,20 @@ impl PPU {
     /// Whether the STAT interrupt signal is currently active (high).
     ///
     /// The signal is the logical OR of all enabled interrupt sources.
+    ///
+    /// DMG quirk: the Mode 2 (OAM) source follows the 80-dot OAM-scan
+    /// rhythm even during VBlank.  The PPU's internal mode-trigger signal
+    /// fires at dot 0 of every scanline — including VBlank lines — and stays
+    /// active for the first 80 dots.  This means enabling OAM_INT causes a
+    /// STAT interrupt at the start of each VBlank line, but the source drops
+    /// low after dot 79 so Mode 2 on line 0 can still produce a rising edge.
     fn stat_line_active(&self) -> bool {
         let lyc_match = (self.lcd_status & STAT_LYC_FLAG) != 0;
+        let oam_active = self.mode == Mode::OamScan
+            || (self.ly == VISIBLE_SCANLINES && self.dot == 0);
         (self.mode == Mode::HBlank && (self.lcd_status & STAT_HBLANK_INT) != 0)
             || (self.mode == Mode::VBlank && (self.lcd_status & STAT_VBLANK_INT) != 0)
-            || (self.mode == Mode::OamScan && (self.lcd_status & STAT_OAM_INT) != 0)
+            || (oam_active && (self.lcd_status & STAT_OAM_INT) != 0)
             || (lyc_match && (self.lcd_status & STAT_LYC_INT) != 0)
     }
 
