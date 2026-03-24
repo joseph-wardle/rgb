@@ -246,7 +246,21 @@ impl MMU {
                     161
                 };
             }
-            0xFF40 | 0xFF42..=0xFF45 | 0xFF47..=0xFF4B => {
+            0xFF45 => {
+                // Writing LYC can immediately change the LYC=LY match
+                // and fire a STAT interrupt on a rising edge.
+                if self.devices.ppu.write_lyc(value) {
+                    self.interrupts.flag |= 0x02;
+                }
+            }
+            0xFF40 => {
+                // Writing LCDC can re-enable the LCD, which may fire a
+                // STAT interrupt if LYC matches the reset LY=0.
+                if self.devices.ppu.write_lcdc(value) {
+                    self.interrupts.flag |= 0x02;
+                }
+            }
+            0xFF42..=0xFF44 | 0xFF47..=0xFF4B => {
                 self.devices.ppu.write_byte(address, value)
             }
             0xFF50 => {

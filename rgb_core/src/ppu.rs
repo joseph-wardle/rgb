@@ -217,6 +217,13 @@ pub(crate) struct PPU {
     // when LY wraps from 153 back to 0 (the start of the second frame).
     first_frame: bool,
 
+    // LCD enable startup delay (T-cycles remaining).
+    //
+    // When the LCD is turned on, the PPU idles for a brief period before
+    // entering Mode 2 on scanline 0.  During this delay the PPU reports
+    // Mode 0 in STAT and does not advance the dot counter.
+    lcd_enable_delay: u8,
+
     // Output framebuffer: one byte per pixel, value 0–3 (DMG shade index).
     // 0 = white, 1 = light gray, 2 = dark gray, 3 = black.
     // The frontend maps these indices to actual colors at display time.
@@ -273,6 +280,7 @@ impl PPU {
             mode3_length: DRAWING_DOTS_BASE, // recomputed at every OAM→Drawing transition
             stat_line: false,
             first_frame: false, // post-boot-ROM start: PPU is already synchronised
+            lcd_enable_delay: 0,
             framebuffer: [0; SCREEN_WIDTH * SCREEN_HEIGHT],
             oam_cpu_read_pending: Cell::new(false),
         }
@@ -305,6 +313,7 @@ impl PPU {
             mode3_length: DRAWING_DOTS_BASE,
             stat_line: false,
             first_frame: false,
+            lcd_enable_delay: 0,
             framebuffer: [0; SCREEN_WIDTH * SCREEN_HEIGHT],
             oam_cpu_read_pending: Cell::new(false),
         }
@@ -374,77 +383,110 @@ impl PPU {
     }
 
     /// Advance the PPU by `cycles` T-cycles and raise any pending interrupts.
+    ///
+    /// Called once per M-cycle (cycles = 4) by the MMU.  Internally advances
+    /// one dot at a time so that mode transitions, STAT signal changes, and
+    /// interrupt edges are evaluated at single-dot precision — matching the
+    /// real PPU's combinational logic.
     pub(crate) fn step(&mut self, cycles: u16, interrupt_flag: &mut u8) {
         if !self.lcd_enabled() {
-            // When the LCD is disabled the PPU halts, LY is held at 0, and
-            // STAT reports Mode 0. On re-enable the PPU restarts from dot 0
-            // of line 0. (Real hardware leaves the first frame blank; not
-            // modeled here.)
-            self.oam_cpu_read_pending.take(); // clear any stale flag while LCD is off
+            // LCD off: hold the PPU in a reset state.  LY = 0, dot = 0,
+            // mode = HBlank.  stat_line is intentionally preserved — the
+            // STAT signal level from before the LCD was disabled determines
+            // whether re-enabling fires a rising-edge interrupt.
+            self.oam_cpu_read_pending.take();
             self.ly = 0;
             self.dot = 0;
-            self.window_line = 0; // reset so re-enable starts the window from row 0
+            self.window_line = 0;
             self.mode = Mode::HBlank;
-            self.lcd_status &= !STAT_MODE_MASK; // mode bits → 0 (HBlank)
-            self.stat_line = false; // reset so re-enable can fire a rising-edge interrupt
+            self.lcd_status &= !STAT_MODE_MASK;
+            self.lcd_enable_delay = 0;
             return;
         }
 
-        // Commit any OAM read-corruption flagged during the previous CPU instruction.
-        // (The flag was set via Cell in read_byte; we apply it here where &mut self
-        // is available and the dot position still reflects the access moment.)
+        // Commit any OAM read-corruption flagged during the previous
+        // instruction (set via Cell in read_byte; applied here where
+        // &mut self is available and the dot position is still correct).
         if self.oam_cpu_read_pending.take() {
             self.corrupt_oam(OamCorruptionKind::Read);
         }
 
-        let prev_dot = self.dot;
-        self.dot += cycles;
+        for _ in 0..cycles {
+            self.advance_one_dot(interrupt_flag);
+        }
+    }
 
-        // Each scanline is 456 dots. The longest SM83 instruction is 24
-        // cycles, so at most one scanline boundary can be crossed per step.
-        if self.dot >= DOTS_PER_SCANLINE {
-            self.dot -= DOTS_PER_SCANLINE;
-            self.ly = (self.ly + 1) % TOTAL_SCANLINES;
-            if self.ly == 0 {
-                self.window_line = 0; // new frame — reset the window's internal row counter
-                self.first_frame = false; // LCD sync complete; rendering resumes this frame
-            }
+    /// Advance the PPU by exactly one dot (T-cycle).
+    ///
+    /// This is the PPU's fundamental clock.  Each dot:
+    ///   1. Advances the dot counter within the current scanline.
+    ///   2. Wraps the scanline (dot 456 → 0) and increments LY.
+    ///   3. Latches LYC=LY at dot 0 (before the mode evaluation so the
+    ///      STAT signal reflects both the new LY and the new mode).
+    ///   4. Caches Mode 3 length at the OAM Scan → Drawing boundary.
+    ///   5. Updates the mode and evaluates the STAT interrupt signal.
+    ///   6. Triggers batch scanline rendering at the Drawing → HBlank boundary.
+    fn advance_one_dot(&mut self, interrupt_flag: &mut u8) {
+        // LCD startup delay: after re-enable the PPU remains in Mode 0 while
+        // the dot counter advances.  On real DMG hardware this HBlank period
+        // lasts ~76 dots before the first OAM scan begins.  The delay dots
+        // count toward the first scanline's 456-dot total.
+        if self.lcd_enable_delay > 0 {
+            self.lcd_enable_delay -= 1;
+            self.dot += 1;
+            return;
         }
 
-        // At the OAM Scan → Drawing transition, compute and cache the variable
-        // Mode 3 length for this scanline. All sprites are now known (the
-        // 80-dot OAM scan has just completed), so penalties can be determined.
+        // The PPU processes the *current* dot first, then advances the counter.
+        // This ensures dot 0 of each scanline is evaluated — important for
+        // LYC latching, mode transitions, and STAT edge detection.
+
+        // --- 1. LYC=LY latch ---
         //
-        // The check is safe without the scanline-wrap guard: a wrap cannot
-        // carry dot past OAM_SCAN_DOTS in a single step (max instruction = 24
-        // T-cycles; OAM_SCAN_DOTS = 80), so this branch fires at most once
-        // per visible scanline, on the step that crosses dot 80.
-        if self.ly < VISIBLE_SCANLINES && prev_dot < OAM_SCAN_DOTS && self.dot >= OAM_SCAN_DOTS {
+        // LYC comparison is latched at the start of each scanline, before
+        // the mode transition.  This way the STAT signal evaluation in
+        // step 3 sees the new LYC flag alongside the new mode — both
+        // change at dot 0 and are visible to the CPU simultaneously.
+        //
+        // On line 153, visible_ly() changes from 153 to 0 at dot 4 (the
+        // line-153 LY=0 glitch), so we re-latch the comparison there too.
+        if self.dot == 0 || (self.ly == 153 && self.dot == 4) {
+            self.latch_lyc_flag();
+        }
+
+        // --- 2. Cache Mode 3 length at the OAM Scan → Drawing transition ---
+        //
+        // At dot 80 the OAM scan is complete and all sprites for this
+        // scanline are known, so we can compute the variable Mode 3 duration.
+        if self.ly < VISIBLE_SCANLINES && self.dot == OAM_SCAN_DOTS {
             let sprites = self.scan_oam_for_scanline();
             self.mode3_length = self.compute_mode3_length(&sprites);
         }
 
+        // --- 3. Update mode and evaluate STAT ---
+        //
+        // This fires VBlank on Mode→1 transitions, updates STAT mode bits,
+        // and fires STAT on any rising edge of the combined signal.
         let prev_mode = self.mode;
         self.update_stat_and_interrupts(interrupt_flag);
 
-        // LYC=LY is latched by the PPU at dot 0 of each scanline — the moment
-        // LY increments.  Keeping this separate from the mode-transition checks
-        // above makes the hardware timing explicit: mode interrupts fire at the
-        // transition, LYC fires at dot 0.  On scanline 144 this also preserves
-        // the hardware ordering: VBlank fires first (above), then LYC=144.
+        // --- 4. Render at the Drawing → HBlank boundary ---
         //
-        // self.dot < cycles holds exactly when the step just crossed dot 0
-        // (the dot counter wrapped): after the wrap, dot = prev + cycles − 456,
-        // which is always < cycles.  Without a wrap, dot = prev + cycles ≥ cycles.
-        if self.dot < cycles {
-            self.update_lyc_compare(interrupt_flag);
-        }
-
-        // Render the scanline when Mode 3 ends. On hardware the pixel pipeline
-        // pushes pixels one-by-one throughout Mode 3; here we produce the whole
-        // scanline at once at the Drawing→HBlank boundary.
+        // The real pixel pipeline pushes pixels one-by-one during Mode 3;
+        // we produce the entire scanline at once when Mode 3 ends.
         if prev_mode == Mode::Drawing && self.mode == Mode::HBlank {
             self.render_scanline();
+        }
+
+        // --- 5. Advance dot counter (post-evaluation) ---
+        self.dot += 1;
+        if self.dot >= DOTS_PER_SCANLINE {
+            self.dot = 0;
+            self.ly = (self.ly + 1) % TOTAL_SCANLINES;
+            if self.ly == 0 {
+                self.window_line = 0;
+                self.first_frame = false;
+            }
         }
     }
 
@@ -454,6 +496,67 @@ impl PPU {
 
     fn lcd_enabled(&self) -> bool {
         (self.lcd_control & LCDC_LCD_ENABLE) != 0
+    }
+
+    /// The LY value visible to the CPU and used for LYC comparison.
+    ///
+    /// On line 153 (the last VBlank line), DMG hardware glitches LY to 0
+    /// after approximately 4 dots.  The internal scanline counter stays at
+    /// 153 for the full 456 dots to keep mode calculations correct, but
+    /// CPU reads of 0xFF44 and LYC=LY matching use this early-reset value.
+    fn visible_ly(&self) -> u8 {
+        if self.ly == 153 && self.dot >= 4 {
+            0
+        } else {
+            self.ly
+        }
+    }
+
+    /// Write to the LCDC register (0xFF40) and return whether a STAT
+    /// interrupt should be raised.
+    ///
+    /// When the LCD is re-enabled (bit 7: 0→1), the PPU resets to scanline 0
+    /// with a startup delay before Mode 2 begins.  If the LYC comparator
+    /// matches immediately (LYC == 0) and the LYC STAT source is enabled,
+    /// the resulting rising edge fires a STAT interrupt.
+    ///
+    /// The MMU calls this for every CPU write to 0xFF40 and raises
+    /// `IF_STAT` (bit 1) when it returns `true`.
+    pub(crate) fn write_lcdc(&mut self, value: u8) -> bool {
+        let was_enabled = self.lcd_enabled();
+        self.lcd_control = value;
+
+        if !was_enabled && self.lcd_enabled() {
+            // LCD re-enable: reset to scanline 0 with a startup delay.
+            self.ly = 0;
+            self.dot = 0;
+            self.mode = Mode::HBlank;
+            self.lcd_status &= !STAT_MODE_MASK;
+            self.window_line = 0;
+            self.first_frame = true;
+            // ~76 dots of Mode 0 before the first Mode 2.  The dot
+            // counter advances during this period so the first
+            // scanline is still 456 dots total.
+            self.lcd_enable_delay = 76;
+
+            // Re-latch LYC=LY now that the comparator is active again.
+            // LY is 0 after re-enable, so the flag reflects LYC == 0.
+            self.latch_lyc_flag();
+
+            // Evaluate the STAT signal for a rising edge.  The key
+            // subtlety: stat_line retains its value from before the LCD
+            // was disabled.  If it was already high (e.g. LYC was matching
+            // before the disable), re-enabling with another match does NOT
+            // create a new rising edge — the signal was never low.
+            let new_stat = self.stat_line_active();
+            if new_stat && !self.stat_line {
+                self.stat_line = new_stat;
+                return true;
+            }
+            self.stat_line = new_stat;
+        }
+
+        false
     }
 
     /// Write to the STAT register (0xFF41) and return whether a spurious STAT
@@ -486,6 +589,45 @@ impl PPU {
             self.stat_line = true;
             return true;
         }
+        false
+    }
+
+    /// Write to the LYC register (0xFF45) and return whether a STAT
+    /// interrupt should be raised.
+    ///
+    /// When the LCD is on, changing LYC immediately updates the LYC=LY flag
+    /// (STAT bit 2) and re-evaluates the STAT interrupt signal.  If the new
+    /// comparison creates a rising edge, an interrupt fires.
+    ///
+    /// When the LCD is off, only the register is updated — the LYC=LY flag
+    /// is frozen at whatever value it had when the LCD was disabled.  The PPU
+    /// comparison circuit is inactive while the display is off.
+    ///
+    /// The MMU calls this for every CPU write to 0xFF45 and raises
+    /// `IF_STAT` (bit 1) when it returns `true`.
+    pub(crate) fn write_lyc(&mut self, value: u8) -> bool {
+        self.lyc = value;
+
+        // The PPU's LYC comparator is only active when the LCD is enabled.
+        if !self.lcd_enabled() {
+            return false;
+        }
+
+        // Update STAT bit 2 so a CPU read of STAT returns the correct flag.
+        // Use visible_ly() because on line 153 after dot 4, LY reads as 0.
+        if self.visible_ly() == self.lyc {
+            self.lcd_status |= STAT_LYC_FLAG;
+        } else {
+            self.lcd_status &= !STAT_LYC_FLAG;
+        }
+
+        // Re-evaluate the STAT line; fire on a rising edge.
+        let new_stat = self.stat_line_active();
+        if new_stat && !self.stat_line {
+            self.stat_line = new_stat;
+            return true;
+        }
+        self.stat_line = new_stat;
         false
     }
 
@@ -608,34 +750,17 @@ impl PPU {
         self.stat_line = stat_line;
     }
 
-    /// Latch the LYC=LY comparison at dot 0 of the new scanline and fire the
-    /// STAT interrupt if the result creates a rising edge on the combined signal.
+    /// Update the LYC=LY flag (STAT bit 2) from the current LY and LYC values.
     ///
-    /// Called once per scanline, immediately after `update_stat_and_interrupts`,
-    /// on the step that crosses dot 0 (when `self.dot < cycles` after the wrap).
-    ///
-    /// Keeping this separate from `update_stat_and_interrupts` documents the
-    /// hardware timing contract: mode-transition interrupts fire at the mode
-    /// boundary; the LYC interrupt fires at dot 0 of the matching scanline.
-    /// On scanline 144 this also preserves hardware ordering: the VBlank
-    /// interrupt fires first (in `update_stat_and_interrupts`), then the
-    /// LYC=144 interrupt fires here.
-    fn update_lyc_compare(&mut self, interrupt_flag: &mut u8) {
-        // Latch the LYC=LY comparison result into STAT bit 2.
-        if self.ly == self.lyc {
+    /// Called at dot 0 of each scanline — *before* the mode/STAT evaluation —
+    /// so that `stat_line_active()` sees the fresh comparison result when it
+    /// computes the combined STAT signal for the new scanline.
+    fn latch_lyc_flag(&mut self) {
+        if self.visible_ly() == self.lyc {
             self.lcd_status |= STAT_LYC_FLAG;
         } else {
             self.lcd_status &= !STAT_LYC_FLAG;
         }
-
-        // Re-evaluate the combined STAT line now that the LYC source may have
-        // changed.  Fire the interrupt on a rising edge, just as the mode-based
-        // sources do in update_stat_and_interrupts.
-        let stat_line = self.stat_line_active();
-        if stat_line && !self.stat_line {
-            *interrupt_flag |= IF_STAT;
-        }
-        self.stat_line = stat_line;
     }
 
     /// Whether the STAT interrupt signal is currently active (high).
@@ -1014,7 +1139,7 @@ impl Memory for PPU {
             0xFF41 => self.lcd_status | 0x80,
             0xFF42 => self.scroll_y,
             0xFF43 => self.scroll_x,
-            0xFF44 => self.ly,
+            0xFF44 => self.visible_ly(),
             0xFF45 => self.lyc,
             0xFF46 => self.dma,
             0xFF47 => self.bg_palette,
@@ -1042,15 +1167,11 @@ impl Memory for PPU {
                 Mode::Drawing => {}
                 _ => self.oam[(address - 0xFE00) as usize] = value,
             },
+            // LCDC writes are routed through write_lcdc() by the MMU for
+            // proper STAT interrupt handling on LCD re-enable.  This arm
+            // covers any non-MMU write paths (e.g. tests writing directly).
             0xFF40 => {
-                let was_enabled = self.lcd_enabled();
-                self.lcd_control = value;
-                // On a 0 → 1 transition of LCDC bit 7 the DMG LCD controller
-                // needs one full frame to sync with the panel before it can
-                // clock out pixels.  Suppress rendering for that frame.
-                if !was_enabled && self.lcd_enabled() {
-                    self.first_frame = true;
-                }
+                self.write_lcdc(value);
             }
             0xFF41 => {
                 // Bits 3–6 are writable (interrupt enables). Bits 0–2 are
@@ -1067,17 +1188,10 @@ impl Memory for PPU {
             0xFF43 => self.scroll_x = value,
             0xFF44 => {} // LY is read-only; CPU writes are ignored
             0xFF45 => {
-                self.lyc = value;
-                // Keep STAT bit 2 (LYC=LY flag) accurate so an immediate CPU
-                // read of STAT returns the correct value.  The LYC STAT
-                // interrupt does not fire here — it fires at dot 0 of the
-                // matching scanline via update_lyc_compare, when the PPU
-                // latches the comparison alongside the LY increment.
-                if self.ly == self.lyc {
-                    self.lcd_status |= STAT_LYC_FLAG;
-                } else {
-                    self.lcd_status &= !STAT_LYC_FLAG;
-                }
+                // CPU writes are routed through PPU::write_lyc() by the MMU,
+                // which also handles the rising-edge STAT interrupt.  This arm
+                // covers non-CPU paths (e.g. tests writing directly to the PPU).
+                self.write_lyc(value);
             }
             0xFF46 => self.dma = value,
             0xFF47 => self.bg_palette = value,
